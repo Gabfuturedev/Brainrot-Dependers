@@ -14,7 +14,7 @@ local KEY_PREFIX = "Player_"
 -- Mock keeps Studio testing self-contained: no API access needed, and you
 -- can't corrupt live player data while experimenting. Flip to false once you
 -- have enabled Studio Access to API Services and want to test real saving.
-local USE_MOCK_IN_STUDIO = false
+local USE_MOCK_IN_STUDIO = true
 
 -- Every field a player can have. Adding a key here is all that's needed -
 -- Profile:Reconcile() backfills it for players who saved before it existed.

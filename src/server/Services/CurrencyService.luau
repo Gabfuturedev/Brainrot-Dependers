@@ -42,6 +42,22 @@ function CurrencyService.addCoins(player: Player, amount: number)
 	end
 end
 
+-- Returns false and changes nothing if they can't afford it.
+function CurrencyService.spendCoins(player: Player, amount: number): boolean
+	local data = DataService.getData(player)
+	if not data or data.coins < amount then
+		return false
+	end
+
+	data.coins -= amount
+
+	local coins = coinValues[player]
+	if coins then
+		coins.Value = data.coins
+	end
+	return true
+end
+
 function CurrencyService.getCoins(player: Player): number
 	local data = DataService.getData(player)
 	return if data then data.coins else 0

@@ -7,6 +7,7 @@ local Services = script.Services
 
 require(Services.CurrencyService).start()
 require(Services.BreakableService).start()
+require(Services.PetInventoryService).start()
 require(Services.PetService).start()
 require(Services.DataService).start()
 

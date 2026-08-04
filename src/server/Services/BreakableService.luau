@@ -23,6 +23,7 @@ local BreakableService = {}
 
 local breakables: { [BasePart]: Breakable } = {}
 local destroyedRemote: RemoteEvent
+local damagedRemote: RemoteEvent
 
 local function register(part: BasePart, areaName: string)
 	if breakables[part] then
@@ -84,6 +85,10 @@ function BreakableService.damage(part: BasePart, amount: number, attacker: Playe
 		return entry.stats.coinReward
 	end
 
+	if attacker then
+		damagedRemote:FireClient(attacker, entry.part, amount)
+	end
+
 	-- brief flash so hits read on screen
 	local flash = TweenService:Create(entry.part, TweenInfo.new(0.12), { Color = Color3.new(1, 1, 1) })
 	flash:Play()
@@ -122,6 +127,7 @@ end
 
 function BreakableService.start()
 	destroyedRemote = Remotes.get("BreakableDestroyed")
+	damagedRemote = Remotes.get("BreakableDamaged")
 
 	local areas = Workspace:WaitForChild("Areas", 10)
 	if not areas then

@@ -1,9 +1,11 @@
 --!strict
--- Spawns one pet per player, makes it follow the owner, and attacks whatever
--- the player clicks. The pet's root is anchored and moved with CFrame - no
--- physics, no network ownership problems, and it stays cheap with many pets.
--- Because it is anchored we also drive the walk/idle animations ourselves and
--- clamp the pet to the ground with a downward raycast.
+-- Spawns each player's equipped pets, orbits them around their owner, and
+-- sends the whole group at whatever the player clicks.
+--
+-- Pets are anchored and moved with CFrame - no physics, no network ownership
+-- problems, and it stays cheap with several pets per player. Because they are
+-- anchored we drive the walk/idle animations ourselves and clamp them to the
+-- ground with a downward raycast.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,10 +19,13 @@ local Remotes = require(Shared.Remotes)
 
 local BreakableService = require(script.Parent.BreakableService)
 local CurrencyService = require(script.Parent.CurrencyService)
+local PetInventoryService = require(script.Parent.PetInventoryService)
 
 local ATTACK_REQUEST_COOLDOWN = 0.1 -- cheap guard against remote spam
 local GROUND_RAY_UP = 8 -- start the ground ray this far above the pet
 local GROUND_RAY_LENGTH = 200
+local HEIGHT_SMOOTHING = 12 -- how fast a pet settles onto a new ground height
+
 -- Locomotion is driven by the pet's REAL speed, not its distance to the goal:
 -- while following, the goal travels with the owner, so the gap stays small
 -- even at a full run. Two thresholds give hysteresis so the animation can't
@@ -28,7 +33,6 @@ local GROUND_RAY_LENGTH = 200
 local WALK_START_SPEED = 1.5 -- studs/sec
 local WALK_STOP_SPEED = 0.8
 local WALK_ANIMATION_SPEED = 16 -- studs/sec the default walk cycle is authored for
-local HEIGHT_SMOOTHING = 12 -- how fast the pet settles onto a new ground height
 
 -- Roblox's default animations, used when a pet has no override in PetConfig.
 local DEFAULT_ANIMATIONS = {
@@ -37,11 +41,10 @@ local DEFAULT_ANIMATIONS = {
 }
 
 type Pet = {
-	owner: Player,
 	model: Model,
 	root: BasePart,
 	stats: PetConfig.PetStats,
-	target: BasePart?,
+	slot: number, -- 1-based position in the orbit
 	lastAttack: number,
 	rootHeight: number, -- studs from the pet's feet up to its root's centre
 	idleTrack: AnimationTrack?,
@@ -49,20 +52,37 @@ type Pet = {
 	walking: boolean,
 }
 
+-- One target per player, not per pet: clicking commands the whole group.
+type PetGroup = {
+	owner: Player,
+	pets: { Pet },
+	target: BasePart?,
+}
+
 local PetService = {}
 
-local pets: { [Player]: Pet } = {}
+local groups: { [Player]: PetGroup } = {}
 local petFolder: Folder
 local targetChangedRemote: RemoteEvent
 local lastRequest: { [Player]: number } = {}
 
--- Single place that mutates pet.target, so the client is always told.
-local function assignTarget(pet: Pet, part: BasePart?)
-	if pet.target == part then
+-- Single place that mutates the target, so the client is always told.
+local function assignTarget(group: PetGroup, part: BasePart?)
+	if group.target == part then
 		return
 	end
-	pet.target = part
-	targetChangedRemote:FireClient(pet.owner, part)
+	group.target = part
+	targetChangedRemote:FireClient(group.owner, part)
+end
+
+-- `character and character:FindFirstChild(..) :: BasePart?` type-checks badly
+-- under --!strict, because the cast binds to the FindFirstChild call only.
+local function rootOf(character: Model?): BasePart?
+	if not character then
+		return nil
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
 end
 
 local function prepareModel(model: Model)
@@ -149,61 +169,52 @@ local function groundHeight(position: Vector3, fallback: number): number
 	return if result then result.Position.Y else fallback
 end
 
-local function despawn(player: Player)
-	local pet = pets[player]
-	if pet then
-		pet.model:Destroy()
-		pets[player] = nil
-	end
+-- Evenly spaced point on a ring, so pets never pile onto the same spot.
+local function slotOffset(slot: number, count: number, radius: number): Vector3
+	local angle = (slot - 1) / math.max(count, 1) * math.pi * 2
+	return Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 end
 
-local function spawnPet(player: Player, character: Model)
-	despawn(player)
-
-	local root = character:WaitForChild("HumanoidRootPart", 10) :: BasePart?
-	if not root then
+local function despawn(player: Player)
+	local group = groups[player]
+	if not group then
 		return
+	end
+	for _, pet in group.pets do
+		pet.model:Destroy()
+	end
+	groups[player] = nil
+end
+
+local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet?
+	local stats = PetConfig.get(petName)
+	if not stats then
+		warn(`[PetService] no stats configured for '{petName}'`)
+		return nil
 	end
 
 	local petsFolder = ServerStorage:FindFirstChild("Pets")
 	if not petsFolder then
 		warn("[PetService] ServerStorage has no 'Pets' folder (check spelling and capitalisation)")
-		return
+		return nil
 	end
 
-	local template = petsFolder:FindFirstChild(PetConfig.DefaultPet)
-	if not template then
-		local found = {}
-		for _, child in petsFolder:GetChildren() do
-			table.insert(found, child.Name)
-		end
-		warn(
-			`[PetService] ServerStorage.Pets has no '{PetConfig.DefaultPet}'. Found: `
-				.. (if #found > 0 then table.concat(found, ", ") else "<empty>")
-		)
-		return
-	end
-
-	if not template:IsA("Model") then
-		warn(`[PetService] ServerStorage.Pets.{PetConfig.DefaultPet} is a {template.ClassName}, expected a Model`)
-		return
-	end
-
-	local stats = PetConfig.get(PetConfig.DefaultPet)
-	if not stats then
-		warn(`[PetService] no stats configured for {PetConfig.DefaultPet}`)
-		return
+	-- fall back to the default model so a pet with no rig yet still works
+	local template = petsFolder:FindFirstChild(stats.model) or petsFolder:FindFirstChild(PetConfig.DefaultPet)
+	if not template or not template:IsA("Model") then
+		warn(`[PetService] no usable model for '{petName}' (wanted '{stats.model}')`)
+		return nil
 	end
 
 	local model = template:Clone()
-	model.Name = `{player.Name}_Pet`
+	model.Name = petName
 	prepareModel(model)
 
 	local petRoot = model:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not petRoot then
-		warn(`[PetService] {PetConfig.DefaultPet} has no HumanoidRootPart`)
+		warn(`[PetService] {template.Name} has no HumanoidRootPart`)
 		model:Destroy()
-		return
+		return nil
 	end
 
 	-- Measure the rig before we anchor it, so we know how high above the
@@ -216,18 +227,17 @@ local function spawnPet(player: Player, character: Model)
 	petRoot.Anchored = true
 	model.PrimaryPart = petRoot
 
-	local spawnPosition = root.Position - root.CFrame.LookVector * stats.followDistance
+	local spawnPosition = ownerRoot.Position + slotOffset(slot, slot, stats.followDistance)
 	petRoot.CFrame = CFrame.new(
-		Vector3.new(spawnPosition.X, groundHeight(spawnPosition, root.Position.Y) + rootHeight, spawnPosition.Z)
+		Vector3.new(spawnPosition.X, groundHeight(spawnPosition, ownerRoot.Position.Y) + rootHeight, spawnPosition.Z)
 	)
 	model.Parent = petFolder
 
 	local pet: Pet = {
-		owner = player,
 		model = model,
 		root = petRoot,
 		stats = stats,
-		target = nil,
+		slot = slot,
 		lastAttack = 0,
 		rootHeight = rootHeight,
 		idleTrack = nil,
@@ -240,22 +250,47 @@ local function spawnPet(player: Player, character: Model)
 		loadAnimations(pet, humanoid)
 	end
 
-	pets[player] = pet
+	return pet
 end
 
--- Where the pet wants to be this frame, on the horizontal plane.
-local function goalPosition(pet: Pet, ownerRoot: BasePart): Vector3
-	local target = pet.target
-	if target then
-		-- stop just short of the target instead of standing inside it
-		local fromTarget = pet.root.Position - target.Position
-		local flat = Vector3.new(fromTarget.X, 0, fromTarget.Z)
-		local direction = if flat.Magnitude > 0.1 then flat.Unit else ownerRoot.CFrame.LookVector
-		local standoff = target.Size.Magnitude / 2 + pet.stats.attackRange * 0.4
-		return target.Position + direction * standoff
+-- Rebuild a player's pets from their equipped list. Cheap enough to call on
+-- every equip change, and it keeps world state and saved state in lockstep.
+local function refresh(player: Player)
+	local previousTarget = groups[player] and groups[player].target
+	despawn(player)
+
+	if player.Parent ~= Players then
+		return
 	end
 
-	return ownerRoot.Position - ownerRoot.CFrame.LookVector * pet.stats.followDistance
+	local ownerRoot = rootOf(player.Character)
+	if not ownerRoot then
+		return -- respawning; CharacterAdded will call us again
+	end
+
+	local names = PetInventoryService.getEquippedPetNames(player)
+	if #names == 0 then
+		return
+	end
+
+	local group: PetGroup = { owner = player, pets = {}, target = nil }
+	for slot, petName in names do
+		local pet = buildPet(petName, slot, ownerRoot)
+		if pet then
+			table.insert(group.pets, pet)
+		end
+	end
+
+	if #group.pets == 0 then
+		return
+	end
+
+	groups[player] = group
+
+	-- keep hitting what they were hitting before they equipped something
+	if previousTarget and BreakableService.isAlive(previousTarget) then
+		assignTarget(group, previousTarget)
+	end
 end
 
 local function updateLocomotion(pet: Pet, speed: number)
@@ -291,38 +326,20 @@ local function updateLocomotion(pet: Pet, speed: number)
 	end
 end
 
--- `character and character:FindFirstChild(..) :: BasePart?` type-checks badly
--- under --!strict, because the cast binds to the FindFirstChild call only.
-local function rootOf(character: Model?): BasePart?
-	if not character then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	return if root and root:IsA("BasePart") then root else nil
-end
+local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTime: number, now: number)
+	local count = #group.pets
+	local target = group.target
 
-local function updatePet(pet: Pet, deltaTime: number, now: number)
-	local ownerRoot = rootOf(pet.owner.Character)
-	if not ownerRoot then
-		return
-	end
-
-	-- drop the target if it died, was removed, or the owner walked away.
-	-- Nothing re-acquires automatically - the player has to click again.
-	local target = pet.target
-	if
-		target
-		and (
-			not target.Parent
-			or not BreakableService.isAlive(target)
-			or (target.Position - ownerRoot.Position).Magnitude > pet.stats.searchRadius
-		)
-	then
-		assignTarget(pet, nil)
+	-- ring around the target while attacking, around the owner while idle
+	local goal: Vector3
+	if target then
+		local standoff = target.Size.Magnitude / 2 + pet.stats.attackRange * 0.4
+		goal = target.Position + slotOffset(pet.slot, count, standoff)
+	else
+		goal = ownerRoot.Position + slotOffset(pet.slot, count, pet.stats.followDistance)
 	end
 
 	local current = pet.root.Position
-	local goal = goalPosition(pet, ownerRoot)
 
 	-- move horizontally only; height comes from the ground below us
 	local offset = Vector3.new(goal.X - current.X, 0, goal.Z - current.Z)
@@ -339,9 +356,7 @@ local function updatePet(pet: Pet, deltaTime: number, now: number)
 	local nextPosition = Vector3.new(nextFlat.X, smoothedY, nextFlat.Z)
 
 	-- face the target, or the way the owner is facing while idling
-	local lookAt = if pet.target
-		then (pet.target :: BasePart).Position
-		else nextPosition + ownerRoot.CFrame.LookVector * 10
+	local lookAt = if target then target.Position else nextPosition + ownerRoot.CFrame.LookVector * 10
 	local flatLook = Vector3.new(lookAt.X, nextPosition.Y, lookAt.Z)
 	if (flatLook - nextPosition).Magnitude > 0.1 then
 		pet.root.CFrame = CFrame.lookAt(nextPosition, flatLook)
@@ -349,33 +364,55 @@ local function updatePet(pet: Pet, deltaTime: number, now: number)
 		pet.root.CFrame = CFrame.new(nextPosition) * (pet.root.CFrame - pet.root.Position)
 	end
 
-	-- attack
-	local attackTarget = pet.target
-	if not attackTarget then
+	if not target then
 		return
 	end
 	if now - pet.lastAttack < pet.stats.attackCooldown then
 		return
 	end
 	-- measure to the target's surface, not its centre, so big parts still work
-	local reach = (attackTarget.Position - pet.root.Position).Magnitude - attackTarget.Size.Magnitude / 2
+	local reach = (target.Position - pet.root.Position).Magnitude - target.Size.Magnitude / 2
 	if reach > pet.stats.attackRange then
 		return
 	end
 
 	pet.lastAttack = now
-	local reward = BreakableService.damage(attackTarget, pet.stats.damage, pet.owner)
+	local reward = BreakableService.damage(target, pet.stats.damage, group.owner)
 	if reward > 0 then
-		CurrencyService.addCoins(pet.owner, reward)
-		assignTarget(pet, nil)
+		CurrencyService.addCoins(group.owner, reward)
+		assignTarget(group, nil)
 	end
 end
 
--- Client asked the pet to attack something. Never trust the part it sent.
-local function onAttackRequested(player: Player, part: unknown)
-	local pet = pets[player]
-	if not pet then
-		warn(`[PetService] {player.Name} clicked but has no pet spawned`)
+local function updateGroup(group: PetGroup, deltaTime: number, now: number)
+	local ownerRoot = rootOf(group.owner.Character)
+	if not ownerRoot then
+		return
+	end
+
+	-- drop the target if it died, was removed, or the owner walked away.
+	-- Nothing re-acquires automatically - the player has to click again.
+	local target = group.target
+	if target then
+		local range = group.pets[1] and group.pets[1].stats.searchRadius or 60
+		if
+			not target.Parent
+			or not BreakableService.isAlive(target)
+			or (target.Position - ownerRoot.Position).Magnitude > range
+		then
+			assignTarget(group, nil)
+		end
+	end
+
+	for _, pet in group.pets do
+		updatePet(pet, group, ownerRoot, deltaTime, now)
+	end
+end
+
+-- Client asked the pets to attack something. Never trust the part it sent.
+local function onAttackRequested(player: Player, part: any)
+	local group = groups[player]
+	if not group then
 		return
 	end
 
@@ -389,7 +426,6 @@ local function onAttackRequested(player: Player, part: unknown)
 		return
 	end
 	if not BreakableService.isAlive(part) then
-		warn(`[PetService] {part:GetFullName()} is not a registered/living breakable - ignoring click`)
 		return
 	end
 
@@ -398,13 +434,12 @@ local function onAttackRequested(player: Player, part: unknown)
 		return
 	end
 
-	local distance = (part.Position - ownerRoot.Position).Magnitude
-	if distance > pet.stats.searchRadius then
-		warn(`[PetService] {part.Name} is {math.floor(distance)} studs away, max is {pet.stats.searchRadius}`)
+	local range = group.pets[1] and group.pets[1].stats.searchRadius or 60
+	if (part.Position - ownerRoot.Position).Magnitude > range then
 		return
 	end
 
-	assignTarget(pet, part)
+	assignTarget(group, part)
 end
 
 function PetService.start()
@@ -419,12 +454,14 @@ function PetService.start()
 		onAttackRequested(player, part)
 	end)
 
+	PetInventoryService.EquippedChanged:Connect(refresh)
+
 	local function bind(player: Player)
-		player.CharacterAdded:Connect(function(character)
-			spawnPet(player, character)
+		player.CharacterAdded:Connect(function()
+			refresh(player)
 		end)
 		if player.Character then
-			spawnPet(player, player.Character)
+			refresh(player)
 		end
 	end
 
@@ -439,8 +476,8 @@ function PetService.start()
 
 	RunService.Heartbeat:Connect(function(deltaTime)
 		local now = os.clock()
-		for _, pet in pets do
-			updatePet(pet, deltaTime, now)
+		for _, group in groups do
+			updateGroup(group, deltaTime, now)
 		end
 	end)
 end

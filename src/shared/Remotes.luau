@@ -6,9 +6,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local REMOTE_NAMES = {
+	"BreakableDamaged", -- server -> client: (part, damage) for hit numbers
 	"BreakableDestroyed", -- server -> client: (part, coinsAwarded)
 	"RequestAttack", -- client -> server: (part) the player clicked
 	"PetTargetChanged", -- server -> client: (part?) what the pet is actually attacking
+	"HatchResult", -- server -> client: (petName, rarity) or (nil, reason) on failure
+	"InventoryUpdated", -- server -> client: (entries, maxEquipped)
+	"RequestEquip", -- client -> server: (petId, shouldEquip)
+	"RequestDeletePet", -- client -> server: (petId)
 }
 
 local Remotes = {}

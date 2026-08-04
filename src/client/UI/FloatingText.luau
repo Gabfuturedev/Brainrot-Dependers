@@ -57,8 +57,9 @@ function FloatingText.start()
 		popup(part.Position, `-{damage}`, Color3.fromRGB(255, 255, 255), 20)
 	end)
 
-	Remotes.get("BreakableDestroyed").OnClientEvent:Connect(function(part, coins)
-		popup(part.Position, `+{coins}`, Color3.fromRGB(255, 214, 92), 30)
+	-- coins now read out where the drop was picked up, not where it spawned
+	Remotes.get("DropCollected").OnClientEvent:Connect(function(position, value)
+		popup(position, `+{value}`, Color3.fromRGB(255, 214, 92), 28)
 	end)
 end
 

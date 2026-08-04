@@ -18,7 +18,6 @@ local PetConfig = require(Shared.Config.PetConfig)
 local Remotes = require(Shared.Remotes)
 
 local BreakableService = require(script.Parent.BreakableService)
-local CurrencyService = require(script.Parent.CurrencyService)
 local PetInventoryService = require(script.Parent.PetInventoryService)
 
 local ATTACK_REQUEST_COOLDOWN = 0.1 -- cheap guard against remote spam
@@ -377,9 +376,9 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	end
 
 	pet.lastAttack = now
-	local reward = BreakableService.damage(target, pet.stats.damage, group.owner)
-	if reward > 0 then
-		CurrencyService.addCoins(group.owner, reward)
+	-- BreakableService pays out: the reward is split between everyone who
+	-- damaged it, so we only care whether this hit finished it off
+	if BreakableService.damage(target, pet.stats.damage, group.owner) then
 		assignTarget(group, nil)
 	end
 end

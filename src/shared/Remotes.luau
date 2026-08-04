@@ -1,19 +1,20 @@
 --!strict
 -- Shared remote registry. The server creates them, the client waits for them,
--- so both sides just do: Remotes.get("BreakableDestroyed")
+-- so both sides just do: Remotes.get("DropCollected")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local REMOTE_NAMES = {
 	"BreakableDamaged", -- server -> client: (part, damage) for hit numbers
-	"BreakableDestroyed", -- server -> client: (part, coinsAwarded)
+	"DropCollected", -- server -> client: (position, value) when a drop is picked up
 	"RequestAttack", -- client -> server: (part) the player clicked
 	"PetTargetChanged", -- server -> client: (part?) what the pet is actually attacking
 	"HatchResult", -- server -> client: (petName, rarity) or (nil, reason) on failure
 	"InventoryUpdated", -- server -> client: (entries, maxEquipped)
 	"RequestEquip", -- client -> server: (petId, shouldEquip)
 	"RequestDeletePet", -- client -> server: (petId)
+	"AreasUpdated", -- server -> client: (unlockedAreas) so barriers can open
 }
 
 local Remotes = {}

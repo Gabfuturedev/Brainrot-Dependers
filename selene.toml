@@ -1,5 +1,8 @@
 std = "roblox"
 
+# Vendored third-party code - not ours to restyle
+exclude = ["src/server/Packages/**"]
+
 [lints]
 # Rojo scripts legitimately reference globals the linter can't see
 global_usage = "allow"

@@ -2,6 +2,7 @@
 -- Owns every breakable part: health, damage, destruction and respawning.
 -- Expects: Workspace/Areas/<AreaName>/Breakables/<any parts>
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
@@ -10,19 +11,24 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BreakableConfig = require(Shared.Config.BreakableConfig)
 local Remotes = require(Shared.Remotes)
 
+local AreaService = require(script.Parent.AreaService)
+local DropService = require(script.Parent.DropService)
+
 type Breakable = {
 	part: BasePart,
+	areaName: string,
 	health: number,
 	maxHealth: number,
 	alive: boolean,
 	baseColor: Color3,
 	stats: BreakableConfig.BreakableStats,
+	-- damage each player has dealt this life, so the reward can be split
+	contributions: { [Player]: number },
 }
 
 local BreakableService = {}
 
 local breakables: { [BasePart]: Breakable } = {}
-local destroyedRemote: RemoteEvent
 local damagedRemote: RemoteEvent
 
 local function register(part: BasePart, areaName: string)
@@ -36,11 +42,13 @@ local function register(part: BasePart, areaName: string)
 
 	breakables[part] = {
 		part = part,
+		areaName = areaName,
 		health = stats.health,
 		maxHealth = stats.health,
 		alive = true,
 		baseColor = part.Color,
 		stats = stats,
+		contributions = {},
 	}
 end
 
@@ -52,37 +60,70 @@ local function respawn(entry: Breakable)
 
 	entry.health = entry.maxHealth
 	entry.alive = true
+	entry.contributions = {}
 	entry.part.Color = entry.baseColor
 	entry.part.Transparency = 0
 	entry.part.CanCollide = true
 	entry.part.CanQuery = true
 end
 
-local function destroyBreakable(entry: Breakable, attacker: Player?)
+-- Spawns drops for every player who damaged this breakable, in proportion to
+-- how much they dealt. Whoever lands the last hit gets no special treatment -
+-- otherwise a player can steal a rock someone else spent a minute on.
+local function payContributors(entry: Breakable)
+	local total = 0
+	for _, dealt in entry.contributions do
+		total += dealt
+	end
+	if total <= 0 then
+		return
+	end
+
+	for player, dealt in entry.contributions do
+		if player.Parent == Players then
+			-- at least 1 coin, so a tiny contribution is never rounded to nothing
+			local share = math.max(1, math.floor(entry.stats.coinReward * (dealt / total) + 0.5))
+			DropService.spawnReward(player, entry.part.Position, share)
+		end
+	end
+end
+
+local function destroyBreakable(entry: Breakable)
 	entry.alive = false
 	entry.part.Transparency = 1
 	entry.part.CanCollide = false
 	entry.part.CanQuery = false
 
-	if attacker then
-		destroyedRemote:FireClient(attacker, entry.part, entry.stats.coinReward)
-	end
-
+	payContributors(entry)
 	task.spawn(respawn, entry)
 end
 
--- Returns the coins awarded (0 if the target survived or was already dead).
-function BreakableService.damage(part: BasePart, amount: number, attacker: Player?): number
+-- Returns true if this hit destroyed the breakable. Coins are paid out here,
+-- not by the caller, because the reward is split between contributors.
+function BreakableService.damage(part: BasePart, amount: number, attacker: Player?): boolean
 	local entry = breakables[part]
 	if not entry or not entry.alive then
-		return 0
+		return false
 	end
 
+	-- the real area gate: opening a barrier is client-side cosmetics, but
+	-- damage in a locked area is refused here regardless of how you got in
+	if attacker and not AreaService.hasAccess(attacker, entry.areaName) then
+		return false
+	end
+
+	-- credit only what was actually needed to finish it off, so padding a
+	-- killing blow with a huge hit can't inflate your share
+	local dealt = math.min(amount, entry.health)
 	entry.health -= amount
 
+	if attacker then
+		entry.contributions[attacker] = (entry.contributions[attacker] or 0) + dealt
+	end
+
 	if entry.health <= 0 then
-		destroyBreakable(entry, attacker)
-		return entry.stats.coinReward
+		destroyBreakable(entry)
+		return true
 	end
 
 	if attacker then
@@ -98,7 +139,7 @@ function BreakableService.damage(part: BasePart, amount: number, attacker: Playe
 		end
 	end)
 
-	return 0
+	return false
 end
 
 function BreakableService.isAlive(part: BasePart): boolean
@@ -126,7 +167,6 @@ function BreakableService.findNearest(position: Vector3, radius: number): BasePa
 end
 
 function BreakableService.start()
-	destroyedRemote = Remotes.get("BreakableDestroyed")
 	damagedRemote = Remotes.get("BreakableDamaged")
 
 	local areas = Workspace:WaitForChild("Areas", 10)

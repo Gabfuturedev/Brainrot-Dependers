@@ -28,7 +28,7 @@ type Entry = {
 
 local function button(text: string, color: Color3, width: number): TextButton
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0, width, 0, 30)
+	btn.Size = UDim2.fromOffset(width, 30)
 	btn.BackgroundColor3 = color
 	btn.BorderSizePixel = 0
 	btn.Font = Enum.Font.GothamBold

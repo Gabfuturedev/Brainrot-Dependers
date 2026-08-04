@@ -68,10 +68,7 @@ function PetConfig.get(petName: string): PetStats?
 		return nil
 	end
 
-	local stats = {}
-	for key, value in BASE do
-		stats[key] = value
-	end
+	local stats = table.clone(BASE)
 	for key, value in overrides do
 		stats[key] = value
 	end

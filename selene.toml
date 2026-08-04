@@ -1,0 +1,5 @@
+std = "roblox"
+
+[lints]
+# Rojo scripts legitimately reference globals the linter can't see
+global_usage = "allow"

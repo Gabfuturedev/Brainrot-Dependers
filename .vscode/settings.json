@@ -1,0 +1,21 @@
+{
+  // Luau LSP: types, autocomplete and error checking.
+  // The sourcemap is what teaches it your Rojo tree, so `script.Services` and
+  // `ReplicatedStorage.Shared` resolve to real instances instead of `any`.
+  "luau-lsp.platform.type": "roblox",
+  "luau-lsp.sourcemap.enabled": true,
+  "luau-lsp.sourcemap.autogenerate": true,
+  "luau-lsp.sourcemap.rojoProjectFile": "default.project.json",
+  "luau-lsp.sourcemap.includeNonScripts": true,
+  "luau-lsp.completion.imports.enabled": true,
+  "luau-lsp.inlayHints.parameterNames": "literals",
+
+  "[luau]": {
+    "editor.defaultFormatter": "JohnnyMorganz.stylua",
+    "editor.formatOnSave": true
+  },
+
+  "files.associations": {
+    "*.luau": "luau"
+  }
+}

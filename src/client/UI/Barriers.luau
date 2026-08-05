@@ -14,7 +14,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AreaConfig = require(Shared.Config.AreaConfig)
 local Remotes = require(Shared.Remotes)
 
-local UNLOCKED_TRANSPARENCY = 0.85
+local UNLOCKED_TRANSPARENCY = 0
 
 local Barriers = {}
 

@@ -21,6 +21,11 @@ local CurrencyService = require(script.Parent.CurrencyService)
 local DataService = require(script.Parent.DataService)
 
 local MAX_EQUIPPED = 3
+-- Hard ceiling on the collection. Without one, ownedPets grows for as long as a
+-- player keeps hatching: the profile gets slower to save every session and the
+-- inventory panel turns into a list nobody can use. Hitting the cap refuses the
+-- hatch rather than auto-deleting, so nothing disappears without being asked.
+local MAX_OWNED = 200
 local PROMPT_DISTANCE = 12
 
 export type Entry = {
@@ -42,9 +47,28 @@ local hatchResult: RemoteEvent
 local inventoryUpdated: RemoteEvent
 
 PetInventoryService.MaxEquipped = MAX_EQUIPPED
+PetInventoryService.MaxOwned = MAX_OWNED
 
 local function isEquipped(data: any, petId: string): boolean
 	return table.find(data.equipped, petId) ~= nil
+end
+
+-- ownedPets is keyed by id, so there is no # to read.
+--
+-- Only pets that still resolve in PetConfig count. A pet whose name was dropped
+-- from the config is invisible in the panel and can't be deleted by id, so
+-- charging storage for it would let a config edit permanently wall someone off
+-- from hatching. Note this deliberately does NOT prune them: a typo in
+-- PetConfig would then wipe collections, where ignoring them is recoverable the
+-- moment the name comes back.
+local function countOwned(data: any): number
+	local count = 0
+	for _, petName in data.ownedPets do
+		if PetConfig.exists(petName) then
+			count += 1
+		end
+	end
+	return count
 end
 
 -- Pet config names of everything currently equipped, in slot order.
@@ -98,12 +122,17 @@ function PetInventoryService.getInventory(player: Player): { Entry }
 end
 
 local function pushInventory(player: Player)
-	inventoryUpdated:FireClient(player, PetInventoryService.getInventory(player), MAX_EQUIPPED)
+	inventoryUpdated:FireClient(player, PetInventoryService.getInventory(player), MAX_EQUIPPED, MAX_OWNED)
 end
 
+-- Returns nil if the pet doesn't exist or the player is at MAX_OWNED. Callers
+-- that charged for this should check capacity first and report it themselves.
 function PetInventoryService.grantPet(player: Player, petName: string): string?
 	local data = DataService.getData(player)
 	if not data or not PetConfig.exists(petName) then
+		return nil
+	end
+	if countOwned(data) >= MAX_OWNED then
 		return nil
 	end
 
@@ -160,11 +189,7 @@ local function deletePet(player: Player, petId: any)
 	end
 
 	-- never let someone strand themselves with no pets at all
-	local owned = 0
-	for _ in data.ownedPets do
-		owned += 1
-	end
-	if owned <= 1 then
+	if countOwned(data) <= 1 then
 		return
 	end
 
@@ -178,6 +203,70 @@ local function deletePet(player: Player, petId: any)
 	pushInventory(player)
 end
 
+-- Clears out every unequipped pet of `rarity`, or of every rarity when nil.
+-- Equipped pets are deliberately never touched: they are the ones the player
+-- chose, and skipping them means PetService needs no rebuild afterwards.
+--
+-- The same floor as deletePet applies. Candidates go weakest-first so that if
+-- the floor does stop us part-way, what survives is the best of the batch
+-- rather than whichever id the hash happened to yield last.
+local function bulkDelete(player: Player, rarity: any)
+	if rarity ~= nil and typeof(rarity) ~= "string" then
+		return
+	end
+
+	local data = DataService.getData(player)
+	if not data then
+		return
+	end
+
+	-- `counts` mirrors countOwned: pets missing from PetConfig don't occupy
+	-- storage, so clearing one must not move us toward the floor either. The
+	-- unfiltered sweep takes them anyway, since it is the only thing that can.
+	local candidates: { { id: string, damage: number, counts: boolean } } = {}
+	for petId, petName in data.ownedPets do
+		if isEquipped(data, petId) then
+			continue
+		end
+
+		local stats = PetConfig.get(petName)
+		if not stats then
+			if rarity == nil then
+				table.insert(candidates, { id = petId, damage = -1, counts = false })
+			end
+		elseif rarity == nil or stats.rarity == rarity then
+			table.insert(candidates, { id = petId, damage = stats.damage, counts = true })
+		end
+	end
+
+	table.sort(candidates, function(a, b)
+		if a.damage == b.damage then
+			return a.id < b.id
+		end
+		return a.damage < b.damage
+	end)
+
+	local remaining = countOwned(data)
+	local deleted = 0
+	for _, candidate in candidates do
+		if candidate.counts then
+			if remaining <= 1 then
+				break
+			end
+			remaining -= 1
+		end
+
+		data.ownedPets[candidate.id] = nil
+		deleted += 1
+	end
+
+	-- nothing matched: say nothing rather than echoing an unchanged inventory,
+	-- which also keeps a spammed remote from generating traffic
+	if deleted > 0 then
+		pushInventory(player)
+	end
+end
+
 local function hatch(player: Player, eggName: string)
 	local egg = EggConfig.get(eggName)
 	if not egg then
@@ -187,6 +276,13 @@ local function hatch(player: Player, eggName: string)
 
 	local data = DataService.getData(player)
 	if not data then
+		return
+	end
+
+	-- capacity before coins: being full is the harder blocker of the two, and
+	-- checking here means we never charge for a pet grantPet would refuse
+	if countOwned(data) >= MAX_OWNED then
+		hatchResult:FireClient(player, nil, `Pet storage full ({MAX_OWNED}) - delete some`)
 		return
 	end
 
@@ -267,6 +363,9 @@ function PetInventoryService.start()
 	end)
 	Remotes.get("RequestDeletePet").OnServerEvent:Connect(function(player, petId)
 		deletePet(player, petId)
+	end)
+	Remotes.get("RequestBulkDelete").OnServerEvent:Connect(function(player, rarity)
+		bulkDelete(player, rarity)
 	end)
 
 	DataService.ProfileLoaded:Connect(onProfileLoaded)

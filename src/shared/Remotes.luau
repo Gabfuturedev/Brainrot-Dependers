@@ -14,6 +14,7 @@ local REMOTE_NAMES = {
 	"InventoryUpdated", -- server -> client: (entries, maxEquipped)
 	"RequestEquip", -- client -> server: (petId, shouldEquip)
 	"RequestDeletePet", -- client -> server: (petId)
+	"RequestBulkDelete", -- client -> server: (rarity?) every unequipped pet of that rarity, nil for all
 	"AreasUpdated", -- server -> client: (unlockedAreas) so barriers can open
 }
 

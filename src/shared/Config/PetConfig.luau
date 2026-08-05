@@ -16,7 +16,14 @@ export type PetStats = {
 	followDistance: number, -- radius of the orbit around the owner when idle
 	moveSpeed: number, -- studs per second
 	searchRadius: number, -- max distance from the owner a clicked target may be
-	-- Optional. Omit to use Roblox's default R6/R15 animations for the rig.
+	-- Hover and bob instead of walking. The bob is what sells a pet as alive,
+	-- so a floating pet needs no rig animation at all - which also sidesteps
+	-- Roblox only letting a place play animation assets it owns. Set false for
+	-- a pet that has a real walk cycle you uploaded yourself.
+	float: boolean,
+	hoverHeight: number, -- studs of clearance under a floating pet
+	-- Optional, and unnecessary for a floating pet. Set only for a rig with
+	-- real tracks; a walker with none falls back to Roblox's R6/R15 defaults.
 	animations: { idle: string, walk: string }?,
 }
 
@@ -30,6 +37,8 @@ local BASE = {
 	followDistance = 7,
 	moveSpeed = 26,
 	searchRadius = 60,
+	float = true,
+	hoverHeight = 1.5,
 }
 
 local OVERRIDES: { [string]: { [string]: any } } = {

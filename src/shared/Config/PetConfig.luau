@@ -139,6 +139,23 @@ PetConfig.DefaultPet = "BonecaAmbalabu"
 -- model in ServerStorage.Pets.
 PetConfig.Starters = { "BallerinaCappuccina", "TralaleroTralala", "TungSahur" }
 
+-- How impressive a rarity is, low to high. Damage has stood in for this in a
+-- few places, which works until a pet is deliberately weak-but-rare - this is
+-- the thing that actually decides how loud a reveal should be.
+PetConfig.RarityOrder = {
+	Starter = 1,
+	Common = 1,
+	Uncommon = 2,
+	Rare = 3,
+	Epic = 4,
+	Legendary = 5,
+}
+
+-- 1 for anything unlisted, so a new rarity is quiet rather than broken.
+function PetConfig.rarityRank(rarity: string): number
+	return PetConfig.RarityOrder[rarity] or 1
+end
+
 PetConfig.RarityColors = {
 	Starter = Color3.fromRGB(90, 220, 210),
 	Common = Color3.fromRGB(200, 200, 200),

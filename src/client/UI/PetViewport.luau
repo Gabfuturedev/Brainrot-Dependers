@@ -38,6 +38,11 @@ local HOVER_SMOOTHING = 12 -- how fast it eases between rest and hover
 export type Options = {
 	spin: boolean?, -- slow continuous turntable
 	hoverTarget: GuiObject?, -- element whose hover state animates the preview
+	-- Renders the rig as a flat black shadow, for a pet not yet discovered.
+	-- Killing the viewport's own lighting is what does it, so the shape stays
+	-- perfectly readable while every detail is hidden - which is the point: you
+	-- can see there is something to find without seeing what.
+	silhouette: boolean?,
 }
 
 local PetViewport = {}
@@ -101,8 +106,13 @@ function PetViewport.create(modelName: string, options: Options?): ViewportFrame
 	local viewport = Instance.new("ViewportFrame")
 	viewport.Name = "Preview"
 	viewport.BackgroundTransparency = 1
-	viewport.Ambient = Color3.fromRGB(190, 190, 205)
-	viewport.LightColor = Color3.fromRGB(255, 255, 255)
+	if config.silhouette then
+		viewport.Ambient = Color3.new(0, 0, 0)
+		viewport.LightColor = Color3.new(0, 0, 0)
+	else
+		viewport.Ambient = Color3.fromRGB(190, 190, 205)
+		viewport.LightColor = Color3.fromRGB(255, 255, 255)
+	end
 	viewport.LightDirection = Vector3.new(-0.4, -1, -0.6)
 
 	local model = template:Clone()

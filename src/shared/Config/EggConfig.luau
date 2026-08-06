@@ -17,18 +17,48 @@ EggConfig.Eggs = {
 	BasicEgg = {
 		displayName = "Basic Egg",
 		cost = 100,
+		-- Descending, and matching PetConfig's rarity order. The two have to
+		-- agree: the drop panel prints rarity and chance side by side, so a
+		-- Legendary at 27% reads as a bug rather than as generosity.
 		weights = {
-			BonecaAmbalabu = 55, -- 55%
-			LiriliLarila = 27, -- 27%
-			Madudung = 12, -- 12%
-			Garamararam = 5, -- 5%
-			BrrBrrPatapim = 1, -- 1%
+			BonecaAmbalabu = 55, -- 55%  Common      5 dmg
+			Madudung = 27, -- 27%  Uncommon   12 dmg
+			Garamararam = 12, -- 12%  Rare       30 dmg
+			BrrBrrPatapim = 5, -- 5%   Epic       75 dmg
+			LiriliLarila = 1, -- 1%   Legendary 190 dmg
 		},
 	} :: Egg,
 }
 
 function EggConfig.get(eggName: string): Egg?
 	return EggConfig.Eggs[eggName]
+end
+
+-- Weights turned into real percentages, strongest chance first. Lives here
+-- rather than in the panel so the number a player is shown is derived from the
+-- same table the roll uses, and cannot drift away from it.
+function EggConfig.chances(egg: Egg): { { name: string, chance: number } }
+	local total = 0
+	for _, weight in egg.weights do
+		total += weight
+	end
+	if total <= 0 then
+		return {}
+	end
+
+	local rows: { { name: string, chance: number } } = {}
+	for petName, weight in egg.weights do
+		table.insert(rows, { name = petName, chance = weight / total * 100 })
+	end
+
+	table.sort(rows, function(a, b)
+		if a.chance == b.chance then
+			return a.name < b.name -- stable when two pets share a weight
+		end
+		return a.chance > b.chance
+	end)
+
+	return rows
 end
 
 -- Weighted random pick. Returns nil only if the table is empty.

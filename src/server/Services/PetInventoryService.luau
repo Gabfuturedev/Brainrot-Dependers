@@ -27,6 +27,15 @@ local MAX_EQUIPPED = 3
 -- hatch rather than auto-deleting, so nothing disappears without being asked.
 local MAX_OWNED = 200
 local PROMPT_DISTANCE = 12
+local HATCH_RANGE_SLACK = 6 -- studs of grace over the prompt's own range
+-- The client locks its buttons for the length of the reveal, but that is UX and
+-- an exploiter has no such lock. This is deliberately much shorter than the
+-- animation: it exists to stop a script draining a balance in one frame, not to
+-- pace a legitimate player, who is already paced by their own UI.
+local HATCH_COOLDOWN = 0.3
+-- The batch sizes the panel offers. Anything not in here is refused, so the
+-- remote cannot be talked into a thousand-pull.
+local HATCH_COUNTS = { 1, 3, 10 }
 
 export type Entry = {
 	id: string,
@@ -46,6 +55,11 @@ PetInventoryService.EquippedChanged = equippedChanged.Event
 local chooseStarterRemote: RemoteEvent
 local hatchResult: RemoteEvent
 local inventoryUpdated: RemoteEvent
+
+-- eggName -> the part its prompt hangs off, so a hatch request can be checked
+-- against where the player actually is
+local eggHosts: { [string]: BasePart } = {}
+local lastHatchAt: { [Player]: number } = {}
 
 PetInventoryService.MaxEquipped = MAX_EQUIPPED
 PetInventoryService.MaxOwned = MAX_OWNED
@@ -123,7 +137,14 @@ function PetInventoryService.getInventory(player: Player): { Entry }
 end
 
 local function pushInventory(player: Player)
-	inventoryUpdated:FireClient(player, PetInventoryService.getInventory(player), MAX_EQUIPPED, MAX_OWNED)
+	local data = DataService.getData(player)
+	inventoryUpdated:FireClient(
+		player,
+		PetInventoryService.getInventory(player),
+		MAX_EQUIPPED,
+		MAX_OWNED,
+		if data then data.discovered else {}
+	)
 end
 
 -- Returns nil if the pet doesn't exist or the player is at MAX_OWNED. Callers
@@ -139,6 +160,7 @@ function PetInventoryService.grantPet(player: Player, petName: string): string?
 
 	local petId = HttpService:GenerateGUID(false)
 	data.ownedPets[petId] = petName
+	data.discovered[petName] = true
 
 	if #data.equipped < MAX_EQUIPPED then
 		table.insert(data.equipped, petId)
@@ -201,6 +223,56 @@ local function deletePet(player: Player, petId: any)
 	end
 
 	data.ownedPets[petId] = nil
+	pushInventory(player)
+end
+
+-- Swaps the equipped set to the strongest pets owned. Ties break on id so the
+-- result is stable, which matters because an unstable order would look like a
+-- different answer every press.
+local function equipBest(player: Player)
+	local data = DataService.getData(player)
+	if not data then
+		return
+	end
+
+	local ranked: { { id: string, damage: number } } = {}
+	for petId, petName in data.ownedPets do
+		local stats = PetConfig.get(petName)
+		if stats then
+			table.insert(ranked, { id = petId, damage = stats.damage })
+		end
+	end
+
+	table.sort(ranked, function(a, b)
+		if a.damage == b.damage then
+			return a.id < b.id
+		end
+		return a.damage > b.damage
+	end)
+
+	local chosen: { string } = {}
+	for index = 1, math.min(MAX_EQUIPPED, #ranked) do
+		table.insert(chosen, ranked[index].id)
+	end
+
+	-- Bail when nothing would change. equippedChanged makes PetService despawn
+	-- and rebuild the whole group, so a repeated press would visibly strobe the
+	-- player's pets for no reason.
+	if #chosen == #data.equipped then
+		local identical = true
+		for index, petId in chosen do
+			if data.equipped[index] ~= petId then
+				identical = false
+				break
+			end
+		end
+		if identical then
+			return
+		end
+	end
+
+	data.equipped = chosen
+	equippedChanged:Fire(player)
 	pushInventory(player)
 end
 
@@ -268,7 +340,31 @@ local function bulkDelete(player: Player, rarity: any)
 	end
 end
 
-local function hatch(player: Player, eggName: string)
+-- Hatching used to be prompt-only, with no remote at all, so a client could
+-- never ask for a pet it had not walked to. Multi-hatch needs buttons and so
+-- needs a remote, and this is what keeps the original guarantee: the server
+-- checks you really are stood at the egg you claim to be at.
+local function isNearEgg(player: Player, eggName: string): boolean
+	local host = eggHosts[eggName]
+	if not host or not host.Parent then
+		return false
+	end
+
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return false
+	end
+
+	-- a little slack over the prompt's own range, so a hatch is not rejected
+	-- for a step taken between pressing the button and the remote arriving
+	return (root.Position - host.Position).Magnitude <= PROMPT_DISTANCE + HATCH_RANGE_SLACK
+end
+
+-- Hatches up to `count` pets. Partial success is deliberate: refusing a ten-pull
+-- outright because the player can afford nine, or has room for nine, feels far
+-- worse than delivering nine and saying so.
+local function hatch(player: Player, eggName: string, count: number)
 	local egg = EggConfig.get(eggName)
 	if not egg then
 		warn(`[PetInventoryService] no config for egg '{eggName}'`)
@@ -280,33 +376,75 @@ local function hatch(player: Player, eggName: string)
 		return
 	end
 
-	-- capacity before coins: being full is the harder blocker of the two, and
-	-- checking here means we never charge for a pet grantPet would refuse
-	if countOwned(data) >= MAX_OWNED then
+	local room = MAX_OWNED - countOwned(data)
+	if room <= 0 then
 		hatchResult:FireClient(player, nil, `Pet storage full ({MAX_OWNED}) - delete some`)
 		return
 	end
 
-	if data.coins < egg.cost then
+	local affordable = math.floor(data.coins / egg.cost)
+	if affordable <= 0 then
 		hatchResult:FireClient(player, nil, `Need {egg.cost - data.coins} more coins`)
 		return
 	end
 
-	local petName = EggConfig.roll(egg)
-	if not petName or not PetConfig.exists(petName) then
-		warn(`[PetInventoryService] {eggName} rolled an invalid pet: {petName}`)
+	local toHatch = math.min(count, room, affordable)
+	local results: { { name: string, rarity: string } } = {}
+
+	for _ = 1, toHatch do
+		local petName = EggConfig.roll(egg)
+		local stats = if petName then PetConfig.get(petName) else nil
+		if not petName or not stats then
+			warn(`[PetInventoryService] {eggName} rolled an invalid pet: {petName}`)
+			break
+		end
+
+		-- charge per pet, after the roll: never take coins for one we cannot
+		-- deliver, and never deliver one we did not charge for
+		if not CurrencyService.spendCoins(player, egg.cost) then
+			break
+		end
+		if not PetInventoryService.grantPet(player, petName) then
+			-- refund: the pet did not land, so the coins should not have gone
+			CurrencyService.addCoins(player, egg.cost)
+			break
+		end
+
+		table.insert(results, { name = petName, rarity = stats.rarity })
+	end
+
+	if #results == 0 then
+		hatchResult:FireClient(player, nil, "Could not hatch")
 		return
 	end
 
-	-- roll first, charge second: never take coins for a hatch we can't deliver
-	if not CurrencyService.spendCoins(player, egg.cost) then
+	hatchResult:FireClient(player, results, count)
+end
+
+-- eggName and count arrive on a remote, so neither is trusted.
+local function onHatchRequested(player: Player, eggName: any, count: any)
+	if typeof(eggName) ~= "string" or not EggConfig.get(eggName) then
 		return
 	end
 
-	PetInventoryService.grantPet(player, petName)
+	-- Silent, not an error toast: a legitimate client never trips this, so
+	-- anything that does is a script and does not deserve a reply.
+	local now = os.clock()
+	if now - (lastHatchAt[player] or 0) < HATCH_COOLDOWN then
+		return
+	end
+	lastHatchAt[player] = now
+	if not isNearEgg(player, eggName) then
+		hatchResult:FireClient(player, nil, "Walk back to the egg")
+		return
+	end
 
-	local stats = PetConfig.get(petName)
-	hatchResult:FireClient(player, petName, stats and stats.rarity or "Common")
+	local requested = if typeof(count) == "number" then math.floor(count) else 1
+	if not table.find(HATCH_COUNTS, requested) then
+		return -- not one of the offered batch sizes
+	end
+
+	hatch(player, eggName, requested)
 end
 
 -- petName arrives on a remote, so it is checked against the starter list rather
@@ -352,6 +490,15 @@ local function onProfileLoaded(player: Player)
 		data.starterChosen = true
 	end
 
+	-- Backfill for profiles that predate the index: anything they still own has
+	-- obviously been discovered. Pets they owned and deleted before this
+	-- existed are unrecoverable, which is the best that can be done.
+	if next(data.discovered) == nil then
+		for _, petName in data.ownedPets do
+			data.discovered[petName] = true
+		end
+	end
+
 	-- returning player: their equipped list is already in the profile
 	equippedChanged:Fire(player)
 	pushInventory(player)
@@ -374,23 +521,19 @@ local function setupEgg(model: Instance, eggName: string)
 		return
 	end
 
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.ActionText = `Hatch ({egg.cost} coins)`
-	prompt.ObjectText = egg.displayName
-	prompt.HoldDuration = 0.2
-	prompt.MaxActivationDistance = PROMPT_DISTANCE
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = host
-
-	prompt.Triggered:Connect(function(player)
-		hatch(player, eggName)
-	end)
+	-- No prompt: the drop table and the hatch buttons live on a billboard the
+	-- client builds over this part, so there is nothing to open. All this side
+	-- needs is where the egg is, to check a hatch request came from someone
+	-- actually standing at it.
+	eggHosts[eggName] = host
 end
 
 function PetInventoryService.start()
 	chooseStarterRemote = Remotes.get("ChooseStarter")
 	hatchResult = Remotes.get("HatchResult")
 	inventoryUpdated = Remotes.get("InventoryUpdated")
+
+	Remotes.get("RequestHatch").OnServerEvent:Connect(onHatchRequested)
 
 	Remotes.get("RequestStarter").OnServerEvent:Connect(function(player, petName)
 		chooseStarter(player, petName)
@@ -405,6 +548,7 @@ function PetInventoryService.start()
 	Remotes.get("RequestBulkDelete").OnServerEvent:Connect(function(player, rarity)
 		bulkDelete(player, rarity)
 	end)
+	Remotes.get("RequestEquipBest").OnServerEvent:Connect(equipBest)
 
 	DataService.ProfileLoaded:Connect(onProfileLoaded)
 
@@ -426,6 +570,7 @@ function PetInventoryService.start()
 	Players.PlayerAdded:Connect(bind)
 
 	Players.PlayerRemoving:Connect(function(player)
+		lastHatchAt[player] = nil
 		equippedChanged:Fire(player) -- lets PetService clean up
 	end)
 

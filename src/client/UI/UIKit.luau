@@ -8,11 +8,85 @@
 -- functions from inside a ref, so adopting React later is not a rewrite of the
 -- visual language too.
 
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Theme = require(script.Parent.Theme)
 
 local UIKit = {}
+
+export type BurstProps = {
+	count: number?,
+	length: number?,
+	width: number?,
+	color: Color3?,
+	spin: number?, -- radians/sec; 0 leaves it still
+}
+
+-- Radiating light, built from thin bars turned around a shared centre. Roblox
+-- has no radial primitive, and a gradient fading from each bar's own middle
+-- outward is what makes the set read as light coming from behind whatever sits
+-- on top of it, rather than as a pinwheel.
+--
+-- Anchor it at the centre of the thing it is lighting; the frame is square and
+-- the bars extend past its bounds in every direction.
+function UIKit.rayBurst(props: BurstProps): Frame
+	local count = props.count or 14
+	local length = props.length or 1100
+	local width = props.width or 34
+	local spin = props.spin or 0.22
+
+	local burst = Instance.new("Frame")
+	burst.Name = "RayBurst"
+	burst.AnchorPoint = Vector2.new(0.5, 0.5)
+	burst.BackgroundTransparency = 1
+	burst.Size = UDim2.fromOffset(length, length)
+
+	-- 180 rather than 360 degrees of spread: each bar is double-ended, so a
+	-- full circle would lay every one of them on top of another.
+	for index = 1, count do
+		local bar = Instance.new("Frame")
+		bar.AnchorPoint = Vector2.new(0.5, 0.5)
+		bar.Position = UDim2.fromScale(0.5, 0.5)
+		bar.Size = UDim2.fromOffset(width, length)
+		bar.Rotation = (index - 1) * (180 / count)
+		bar.BackgroundColor3 = props.color or Theme.Color.Text
+		bar.BorderSizePixel = 0
+		bar.Parent = burst
+
+		local fade = Instance.new("UIGradient")
+		fade.Rotation = 90
+		fade.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.5, 0.6),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		fade.Parent = bar
+	end
+
+	if spin > 0 then
+		local connection: RBXScriptConnection
+		connection = RunService.RenderStepped:Connect(function(deltaTime)
+			-- self-cleaning, so a caller can destroy the burst without leaking
+			if not burst.Parent then
+				connection:Disconnect()
+				return
+			end
+			burst.Rotation += math.deg(spin) * deltaTime
+		end)
+	end
+
+	return burst
+end
+
+-- The burst has no colour of its own; the bars carry it.
+function UIKit.tintBurst(burst: Frame, color: Color3)
+	for _, bar in burst:GetChildren() do
+		if bar:IsA("Frame") then
+			bar.BackgroundColor3 = color
+		end
+	end
+end
 
 -- Rounds a corner. Passing Theme.Radius.pill gives a capsule, since UICorner
 -- clamps a scale radius to half the shorter side.

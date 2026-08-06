@@ -25,6 +25,10 @@ local PROFILE_TEMPLATE = {
 	equipped = {} :: { string }, -- petIds currently following the player
 	unlockedAreas = { Area1 = true } :: { [string]: boolean },
 	starterChosen = false, -- the one-time pick on first join has been made
+	-- Every pet name ever obtained, which is NOT the same as ownedPets: an
+	-- index has to remember what you have seen even after you delete it, or
+	-- clearing out duplicates would re-lock pets you already found.
+	discovered = {} :: { [string]: boolean },
 }
 
 export type Data = typeof(PROFILE_TEMPLATE)

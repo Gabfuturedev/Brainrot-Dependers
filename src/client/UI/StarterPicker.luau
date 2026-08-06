@@ -3,12 +3,17 @@
 -- appears and re-validates whatever comes back, so this only renders the
 -- options it was handed and reports which one was clicked.
 --
--- This is the first screen anyone sees, so it is the loudest thing in the game:
--- oversized outlined type, cards that punch in one after another, and the whole
--- card tinted by rarity rather than a small coloured label on it.
+-- Built on the same stage as the hatch reveal: dimmed world, light bursting
+-- from behind, models front and centre. No cards. A card puts a frame around a
+-- pet and turns it into a menu item, which is exactly wrong for the first
+-- screen anyone sees - the brainrots should be the interface, not the contents
+-- of one.
+--
+-- Each starter gets its own burst so hovering can light it up individually,
+-- which is what makes the choice feel like a choice rather than a form.
 --
 -- Model previews are optional. The client cannot see ServerStorage.Pets, so a
--- card falls back to a large initial unless a copy of the rig is sitting in
+-- pod falls back to a large initial unless a copy of the rig is sitting in
 -- ReplicatedStorage.PetPreviews under the same name.
 
 local Players = game:GetService("Players")
@@ -23,27 +28,20 @@ local PetViewport = require(script.Parent.PetViewport)
 local Theme = require(script.Parent.Theme)
 local UIKit = require(script.Parent.UIKit)
 
-local CARD_SIZE = UDim2.fromOffset(196, 300)
-local STAGGER = 0.07 -- seconds between each card arriving
+local POD_SIZE = UDim2.fromOffset(236, 356)
+local MODEL_SIZE = 210
+local POD_GAP = 30
+local STAGGER = 0.09 -- seconds between each starter arriving
+
+local BURST_LENGTH = 420
+local BURST_COUNT = 10
+local BURST_WIDTH = 22
+local BURST_REST = 0.72 -- ray transparency when idle
+local BURST_HOVER = 0.34 -- and when hovered
 
 local player = Players.LocalPlayer
 
 local StarterPicker = {}
-
--- Static three-quarter view that leans toward the cursor when its card is
--- hovered. Pass spin = true instead for a slow turntable.
-local function addPreview(card: GuiObject, modelName: string): boolean
-	local viewport = PetViewport.create(modelName, { hoverTarget = card })
-	if not viewport then
-		return false
-	end
-
-	viewport.Position = UDim2.fromOffset(0, 14)
-	viewport.Size = UDim2.new(1, 0, 0, 156)
-	viewport.ZIndex = 3
-	viewport.Parent = card
-	return true
-end
 
 function StarterPicker.start()
 	local playerGui = player:WaitForChild("PlayerGui")
@@ -53,17 +51,18 @@ function StarterPicker.start()
 	gui.Name = "StarterPicker"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
-	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling -- so shadows sit behind
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.DisplayOrder = 10 -- over every other panel; nothing else matters yet
 	gui.Enabled = false
 
-	-- Full-screen scrim. Deliberately has no close button: the pick is the only
-	-- way out, and a dismissed picker would leave a player with no pet at all.
+	-- Deliberately has no close button: the pick is the only way out, and a
+	-- dismissed picker would leave a player with no pet at all.
 	local scrim = Instance.new("Frame")
 	scrim.Size = UDim2.fromScale(1, 1)
 	scrim.BackgroundColor3 = Theme.Color.Shadow
-	scrim.BackgroundTransparency = Theme.Transparency.Scrim
+	scrim.BackgroundTransparency = 0.25
 	scrim.BorderSizePixel = 0
+	scrim.ZIndex = 1
 	scrim.Parent = gui
 
 	local title = UIKit.label({
@@ -74,9 +73,10 @@ function StarterPicker.start()
 		outline = Theme.Stroke.heavy,
 	})
 	title.AnchorPoint = Vector2.new(0.5, 0)
-	title.Position = UDim2.fromScale(0.5, 0.13)
-	title.Size = UDim2.fromOffset(720, 48)
-	title.Parent = scrim
+	title.Position = UDim2.fromScale(0.5, 0.11)
+	title.Size = UDim2.fromOffset(780, 48)
+	title.ZIndex = 6
+	title.Parent = gui
 
 	local subtitle = UIKit.label({
 		text = "You only choose once — they are all equally strong",
@@ -85,21 +85,23 @@ function StarterPicker.start()
 		outline = Theme.Stroke.thin,
 	})
 	subtitle.AnchorPoint = Vector2.new(0.5, 0)
-	subtitle.Position = UDim2.fromScale(0.5, 0.13)
-	subtitle.Size = UDim2.fromOffset(720, 86)
-	subtitle.Parent = scrim
+	subtitle.Position = UDim2.fromScale(0.5, 0.11)
+	subtitle.Size = UDim2.fromOffset(780, 90)
+	subtitle.ZIndex = 6
+	subtitle.Parent = gui
 
 	local row = Instance.new("Frame")
 	row.BackgroundTransparency = 1
 	row.AnchorPoint = Vector2.new(0.5, 0.5)
-	row.Position = UDim2.fromScale(0.5, 0.53)
-	row.Size = UDim2.fromOffset(0, CARD_SIZE.Y.Offset)
+	row.Position = UDim2.fromScale(0.5, 0.55)
+	row.Size = UDim2.fromOffset(0, POD_SIZE.Y.Offset)
 	row.AutomaticSize = Enum.AutomaticSize.X
-	row.Parent = scrim
+	row.ZIndex = 3
+	row.Parent = gui
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.Padding = UDim.new(0, Theme.Space.lg)
+	layout.Padding = UDim.new(0, POD_GAP)
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.VerticalAlignment = Enum.VerticalAlignment.Center
 	layout.Parent = row
@@ -110,7 +112,7 @@ function StarterPicker.start()
 	-- picker up while the first is granted reads as the click not landing.
 	local picked = false
 
-	local function addCard(order: number, petName: string)
+	local function addPod(order: number, petName: string)
 		local stats = PetConfig.get(petName)
 		if not stats then
 			return -- config and server disagree; skip rather than render a blank
@@ -118,33 +120,58 @@ function StarterPicker.start()
 
 		local accent = PetConfig.RarityColors[stats.rarity] or Theme.Color.Primary
 
-		local card = Instance.new("TextButton")
-		card.BackgroundColor3 = Theme.Color.SurfaceRaised
-		card.BorderSizePixel = 0
-		card.AutoButtonColor = false
-		card.Text = ""
-		card.Size = CARD_SIZE
-		card.LayoutOrder = order
-		card.ZIndex = 2
-		card.Parent = row
+		-- The pod itself is invisible: it exists only as a hit area, so hover
+		-- and click cover the whole column rather than just the button.
+		local pod = Instance.new("TextButton")
+		pod.BackgroundTransparency = 1
+		pod.Text = ""
+		pod.AutoButtonColor = false
+		pod.Size = POD_SIZE
+		pod.LayoutOrder = order
+		pod.ZIndex = 3
+		pod.Parent = row
 
-		UIKit.corner(card, Theme.Radius.lg)
-		UIKit.gradient(card, Theme.Gradient.normal)
-		UIKit.shadow(card, 6)
-		local outline = UIKit.stroke(card, Theme.Stroke.heavy, accent)
+		local burst = UIKit.rayBurst({
+			count = BURST_COUNT,
+			length = BURST_LENGTH,
+			width = BURST_WIDTH,
+			color = accent,
+			spin = 0.16,
+		})
+		burst.Position = UDim2.new(0.5, 0, 0, MODEL_SIZE / 2 + 10)
+		burst.ZIndex = 2
+		burst.Parent = pod
 
-		if not addPreview(card, stats.model) then
+		for _, bar in burst:GetChildren() do
+			if bar:IsA("Frame") then
+				bar.BackgroundTransparency = BURST_REST
+			end
+		end
+
+		local modelSlot = Instance.new("Frame")
+		modelSlot.AnchorPoint = Vector2.new(0.5, 0)
+		modelSlot.BackgroundTransparency = 1
+		modelSlot.Position = UDim2.new(0.5, 0, 0, 10)
+		modelSlot.Size = UDim2.fromOffset(MODEL_SIZE, MODEL_SIZE)
+		modelSlot.ZIndex = 4
+		modelSlot.Parent = pod
+
+		local preview = PetViewport.create(stats.model, { hoverTarget = pod })
+		if preview then
+			preview.Size = UDim2.fromScale(1, 1)
+			preview.ZIndex = 5
+			preview.Parent = modelSlot
+		else
 			local initial = UIKit.label({
 				text = string.sub(stats.displayName, 1, 1),
 				color = accent,
 				size = Theme.TextSize.hero,
 				font = Theme.Font.Heavy,
-				outline = Theme.Stroke.thick,
+				outline = Theme.Stroke.heavy,
 			})
-			initial.Position = UDim2.fromOffset(0, 14)
-			initial.Size = UDim2.new(1, 0, 0, 156)
-			initial.ZIndex = 3
-			initial.Parent = card
+			initial.Size = UDim2.fromScale(1, 1)
+			initial.ZIndex = 5
+			initial.Parent = modelSlot
 		end
 
 		local name = UIKit.label({
@@ -152,51 +179,41 @@ function StarterPicker.start()
 			color = Theme.Color.Text,
 			size = Theme.TextSize.md,
 			font = Theme.Font.Heavy,
-			outline = Theme.Stroke.thin,
+			outline = Theme.Stroke.thick,
 		})
-		name.Position = UDim2.fromOffset(Theme.Space.sm, 178)
-		name.Size = UDim2.new(1, -Theme.Space.sm * 2, 0, 46)
+		name.Position = UDim2.fromOffset(0, MODEL_SIZE + 18)
+		name.Size = UDim2.new(1, 0, 0, 48)
 		name.TextWrapped = true
-		name.ZIndex = 3
-		name.Parent = card
-
-		local damage = UIKit.label({
-			text = `{stats.damage} DMG`,
-			color = Theme.Color.TextMuted,
-			size = Theme.TextSize.xs,
-			outline = Theme.Stroke.thin,
-		})
-		damage.Position = UDim2.fromOffset(0, 224)
-		damage.Size = UDim2.new(1, 0, 0, 18)
-		damage.ZIndex = 3
-		damage.Parent = card
+		name.ZIndex = 5
+		name.Parent = pod
 
 		local choose = UIKit.button({ text = "CHOOSE", color = accent, textSize = Theme.TextSize.sm })
 		choose.AnchorPoint = Vector2.new(0.5, 1)
-		choose.Position = UDim2.new(0.5, 0, 1, -Theme.Space.md)
-		choose.Size = UDim2.new(1, -Theme.Space.xl, 0, 40)
-		choose.TextColor3 = Theme.Color.Text
-		choose.ZIndex = 3
-		choose.Active = false -- the whole card is the click target
-		choose.Parent = card
+		choose.Position = UDim2.fromScale(0.5, 1)
+		choose.Size = UDim2.fromOffset(170, 46)
+		choose.ZIndex = 5
+		choose.Active = false -- the whole pod is the click target
+		choose.Parent = pod
 
-		card.MouseEnter:Connect(function()
+		pod.MouseEnter:Connect(function()
 			if picked then
 				return
 			end
-			outline.Thickness = Theme.Stroke.heavy + 1
-			TweenService:Create(card, Theme.Motion.Fast, {
-				BackgroundColor3 = Theme.Color.SurfaceHover,
-			}):Play()
+			for _, bar in burst:GetChildren() do
+				if bar:IsA("Frame") then
+					TweenService:Create(bar, Theme.Motion.Fast, { BackgroundTransparency = BURST_HOVER }):Play()
+				end
+			end
 		end)
-		card.MouseLeave:Connect(function()
-			outline.Thickness = Theme.Stroke.heavy
-			TweenService:Create(card, Theme.Motion.Fast, {
-				BackgroundColor3 = Theme.Color.SurfaceRaised,
-			}):Play()
+		pod.MouseLeave:Connect(function()
+			for _, bar in burst:GetChildren() do
+				if bar:IsA("Frame") then
+					TweenService:Create(bar, Theme.Motion.Fast, { BackgroundTransparency = BURST_REST }):Play()
+				end
+			end
 		end)
 
-		card.Activated:Connect(function()
+		pod.Activated:Connect(function()
 			if picked then
 				return
 			end
@@ -205,11 +222,14 @@ function StarterPicker.start()
 			gui.Enabled = false
 		end)
 
-		-- staggered arrival, so three cards read as dealt rather than as one
+		-- staggered arrival, so three options read as dealt rather than as one
 		-- block appearing
+		modelSlot.Size = UDim2.fromOffset(0, 0)
 		task.delay((order - 1) * STAGGER, function()
-			if card.Parent then
-				UIKit.popIn(card, CARD_SIZE)
+			if modelSlot.Parent then
+				TweenService:Create(modelSlot, Theme.Motion.Enter, {
+					Size = UDim2.fromOffset(MODEL_SIZE, MODEL_SIZE),
+				}):Play()
 			end
 		end)
 	end
@@ -228,7 +248,7 @@ function StarterPicker.start()
 		end
 
 		for order, petName in petNames do
-			addCard(order, petName)
+			addPod(order, petName)
 		end
 
 		gui.Enabled = true

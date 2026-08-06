@@ -43,6 +43,14 @@ local BOB_HEIGHT = 0.4 -- studs above and below the hover height
 local BOB_SPEED = 3 -- radians/sec through the bob cycle
 local MAX_LEAN = math.rad(14) -- forward tilt at full speed
 
+-- Attack tell. With no rig animation to play, the strike has to come out of the
+-- movement itself: the pet lunges at what it is hitting and eases back out.
+local LUNGE_DISTANCE = 2.5 -- studs toward the target at full extension
+local LUNGE_TIME = 0.28 -- seconds for the whole out-and-back
+local LUNGE_OUT = 0.35 -- fraction of that spent striking outward, so the
+-- recovery is the slower half - snapping back as fast as it struck reads as a
+-- twitch rather than a hit
+
 -- Pets trail in a row across the owner's back rather than ringing them.
 local FOLLOW_SPACING = 4 -- studs between neighbours in the row
 
@@ -72,9 +80,13 @@ type Pet = {
 	slot: number, -- 1-based position in the orbit
 	lastAttack: number,
 	rootHeight: number, -- studs from the pet's feet up to its root's centre
-	baseY: number, -- smoothed hover height, before the bob is added
+	-- Where the pet has actually moved to. Bob and lunge are added on top of
+	-- this when the CFrame is written, never folded back in - a decoration that
+	-- feeds into the movement state makes the pet chase its own animation.
+	basePosition: Vector3,
 	bobPhase: number, -- so a group doesn't bob in lockstep
 	lean: number, -- eased forward tilt, radians
+	lungeDirection: Vector3, -- flat heading of the strike in progress
 	idleTrack: AnimationTrack?,
 	walkTrack: AnimationTrack?,
 	walking: boolean,
@@ -353,6 +365,20 @@ end
 -- the group swings round as they turn instead of sitting at a fixed compass
 -- point. A pet still only closes at moveSpeed, so a turn reads as the row
 -- trailing round after you rather than snapping to its new spot.
+-- 0 at rest, 1 at full extension. The two halves meet at the peak with zero
+-- gradient, so there is no visible corner where the strike becomes the recovery.
+local function lungeAmount(elapsed: number): number
+	if elapsed < 0 or elapsed >= LUNGE_TIME then
+		return 0
+	end
+
+	local alpha = elapsed / LUNGE_TIME
+	if alpha < LUNGE_OUT then
+		return math.sin(alpha / LUNGE_OUT * (math.pi / 2))
+	end
+	return math.cos((alpha - LUNGE_OUT) / (1 - LUNGE_OUT) * (math.pi / 2))
+end
+
 local function followOffset(ownerRoot: BasePart, slot: number, count: number, distance: number): Vector3
 	local look = ownerRoot.CFrame.LookVector
 	local flat = Vector3.new(look.X, 0, look.Z)
@@ -422,7 +448,8 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 	local hover = rootHeight + stats.hoverHeight
 	local spawnPosition = ownerRoot.Position + followOffset(ownerRoot, slot, slot, stats.followDistance)
 	local spawnY = groundHeight(spawnPosition, ownerRoot.Position.Y) + hover
-	petRoot.CFrame = CFrame.new(Vector3.new(spawnPosition.X, spawnY, spawnPosition.Z))
+	local basePosition = Vector3.new(spawnPosition.X, spawnY, spawnPosition.Z)
+	petRoot.CFrame = CFrame.new(basePosition)
 	model.Parent = petFolder
 
 	local pet: Pet = {
@@ -432,9 +459,10 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 		slot = slot,
 		lastAttack = 0,
 		rootHeight = rootHeight,
-		baseY = spawnY,
+		basePosition = basePosition,
 		bobPhase = math.random() * math.pi * 2,
 		lean = 0,
+		lungeDirection = Vector3.zero,
 		idleTrack = nil,
 		walkTrack = nil,
 		walking = false,
@@ -533,7 +561,9 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 		goal = ownerRoot.Position + followOffset(ownerRoot, pet.slot, count, pet.stats.followDistance)
 	end
 
-	local current = pet.root.Position
+	-- movement works off basePosition, not the rendered root: reading back a
+	-- position that already has bob and lunge baked in makes the pet chase them
+	local current = pet.basePosition
 
 	-- move horizontally only; height comes from the ground below us
 	local offset = Vector3.new(goal.X - current.X, 0, goal.Z - current.Z)
@@ -555,11 +585,15 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	-- bob rides on top of the smoothed value instead of being fed through it -
 	-- run it through the smoothing and it damps away to nothing.
 	local hover = pet.rootHeight + pet.stats.hoverHeight
-	local targetBase = groundHeight(nextFlat, pet.baseY - hover) + hover
-	pet.baseY += (targetBase - pet.baseY) * math.min(deltaTime * HEIGHT_SMOOTHING, 1)
+	local targetBase = groundHeight(nextFlat, current.Y - hover) + hover
+	local baseY = current.Y + (targetBase - current.Y) * math.min(deltaTime * HEIGHT_SMOOTHING, 1)
 
+	pet.basePosition = Vector3.new(nextFlat.X, baseY, nextFlat.Z)
+
+	-- everything from here is decoration layered onto basePosition
 	local bob = if pet.stats.float then math.sin(now * BOB_SPEED + pet.bobPhase) * BOB_HEIGHT else 0
-	local nextPosition = Vector3.new(nextFlat.X, pet.baseY + bob, nextFlat.Z)
+	local lunge = lungeAmount(now - pet.lastAttack) * LUNGE_DISTANCE
+	local nextPosition = pet.basePosition + Vector3.new(0, bob, 0) + pet.lungeDirection * lunge
 
 	-- Nose down into the direction of travel, eased rather than set: the raw
 	-- speed strobes between a full step and none once the pet is sitting on its
@@ -589,13 +623,23 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	if now - pet.lastAttack < pet.stats.attackCooldown then
 		return
 	end
-	-- measure to the target's surface, not its centre, so big parts still work
-	local reach = (target.Position - pet.root.Position).Magnitude - target.Size.Magnitude / 2
+	-- measure to the target's surface, not its centre, so big parts still work.
+	-- basePosition rather than the root, or a pet at the limit of its range
+	-- would flicker in and out of reach as it bobs and lunges.
+	local reach = (target.Position - pet.basePosition).Magnitude - target.Size.Magnitude / 2
 	if reach > pet.stats.attackRange then
 		return
 	end
 
 	pet.lastAttack = now
+
+	-- Aim the strike now and keep it, rather than re-deriving it each frame: a
+	-- killing blow clears the target immediately, and the lunge should still
+	-- play out instead of being cut off on the hit that mattered most.
+	local toTarget = target.Position - pet.basePosition
+	local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
+	pet.lungeDirection = if flat.Magnitude > 0.01 then flat.Unit else Vector3.zero
+
 	-- BreakableService pays out: the reward is split between everyone who
 	-- damaged it, so we only care whether this hit finished it off
 	if BreakableService.damage(target, pet.stats.damage, group.owner) then

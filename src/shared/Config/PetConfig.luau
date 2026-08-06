@@ -4,7 +4,7 @@
 --
 -- Damage tuning (see EggConfig for how often each is rolled):
 --   Common 5 -> 10 DPS -> ~55 coins/min in Area1
---   each tier is roughly 2.5x the last, so a Legendary is ~18x a Common
+--   each tier is roughly 2.5x the last, so a Legendary is ~38x a Common
 
 export type PetStats = {
 	displayName: string,
@@ -28,7 +28,8 @@ export type PetStats = {
 }
 
 local BASE = {
-	-- until you build more rigs, every pet uses the petTest model
+	-- only reached by a pet that names no model of its own; PetService warns
+	-- when it has to fall back here rather than substituting in silence
 	model = "petTest",
 	rarity = "Common",
 	damage = 500,
@@ -41,29 +42,107 @@ local BASE = {
 	hoverHeight = 1.5,
 }
 
+-- The key is save-data identity: it is written into profiles and into
+-- EggConfig's weight tables, so it must never change once anyone has hatched
+-- one. `model` is a Studio asset name and is free to be renamed. Keeping the
+-- two apart is what makes renaming a model a one-line edit here instead of a
+-- data migration - which is also why the keys carry no spaces even though the
+-- models do.
 local OVERRIDES: { [string]: { [string]: any } } = {
-	petTest = { displayName = "Test Pet", rarity = "Common", damage = 5 },
-	Rocky = { displayName = "Rocky", rarity = "Uncommon", damage = 12, moveSpeed = 27 },
-	Blaze = { displayName = "Blaze", rarity = "Rare", damage = 30, moveSpeed = 29 },
-	Zephyr = {
-		displayName = "Zephyr",
+	BonecaAmbalabu = {
+		displayName = "Boneca Ambalabu",
+		model = "Boneca Ambalabu",
+		rarity = "Common",
+		damage = 5,
+	},
+	Madudung = {
+		displayName = "Madudung",
+		model = "Madudung",
+		rarity = "Uncommon",
+		damage = 12,
+		moveSpeed = 27,
+	},
+	Garamararam = {
+		displayName = "Garamararam",
+		model = "Garamararam",
+		rarity = "Rare",
+		damage = 30,
+		moveSpeed = 29,
+	},
+	BrrBrrPatapim = {
+		displayName = "Brr Brr Patapim",
+		model = "Brr Brr Patapim",
+		rarity = "Epic",
+		damage = 75,
+		moveSpeed = 30,
+		attackCooldown = 0.45,
+	},
+	LiriliLarila = {
+		displayName = "Lirili Larila",
+		model = "Lirili Larila",
 		rarity = "Legendary",
-		damage = 90,
+		damage = 190,
 		moveSpeed = 32,
 		attackCooldown = 0.4,
 	},
+
+	-- Starters. Offered as a one-time choice on first join and obtainable no
+	-- other way, so they are deliberately identical on damage and cooldown -
+	-- the pick should be about which brainrot you want following you around,
+	-- not about which one turns out to have been the right answer 20 hatches
+	-- later. Only the way they move differs.
+	BallerinaCappuccina = {
+		displayName = "Ballerina Cappuccina",
+		model = "Ballerina Cappuccina",
+		rarity = "Starter",
+		damage = 8,
+		moveSpeed = 30, -- keeps up best
+	},
+	TralaleroTralala = {
+		displayName = "Tralalero Tralala",
+		model = "Tralalero Tralala",
+		rarity = "Starter",
+		damage = 8,
+		attackRange = 11, -- reaches furthest
+	},
+	TungSahur = {
+		displayName = "Tung Sahur",
+		model = "Tung Sahur",
+		rarity = "Starter",
+		damage = 8,
+		followDistance = 5, -- sticks closest
+	},
+
+	-- In no egg, so unobtainable: this is the rig PetService falls back to when
+	-- a pet's model is missing, and a handy thing to test against. Keep a model
+	-- of this name in ServerStorage.Pets.
+	petTest = { displayName = "Test Pet", rarity = "Common", damage = 5 },
 }
 
 local PetConfig = {}
 
-PetConfig.DefaultPet = "petTest" -- granted free so a new player always has one
+-- The rig PetService falls back to when a pet's model is missing. Nothing is
+-- granted from it any more - new players choose a starter instead - but its
+-- model still has to exist, since it is the last resort when every other one
+-- is absent.
+PetConfig.DefaultPet = "BonecaAmbalabu"
+
+-- Offered on first join, in this order. Adding a fourth is one line here plus a
+-- model in ServerStorage.Pets.
+PetConfig.Starters = { "BallerinaCappuccina", "TralaleroTralala", "TungSahur" }
 
 PetConfig.RarityColors = {
+	Starter = Color3.fromRGB(90, 220, 210),
 	Common = Color3.fromRGB(200, 200, 200),
 	Uncommon = Color3.fromRGB(120, 220, 120),
 	Rare = Color3.fromRGB(100, 170, 255),
+	Epic = Color3.fromRGB(180, 120, 255),
 	Legendary = Color3.fromRGB(255, 190, 60),
 }
+
+function PetConfig.isStarter(petName: string): boolean
+	return table.find(PetConfig.Starters, petName) ~= nil
+end
 
 local cache: { [string]: PetStats } = {}
 

@@ -24,6 +24,7 @@ local PROFILE_TEMPLATE = {
 	ownedPets = {} :: { [string]: string }, -- [petId] = pet name from PetConfig
 	equipped = {} :: { string }, -- petIds currently following the player
 	unlockedAreas = { Area1 = true } :: { [string]: boolean },
+	starterChosen = false, -- the one-time pick on first join has been made
 }
 
 export type Data = typeof(PROFILE_TEMPLATE)

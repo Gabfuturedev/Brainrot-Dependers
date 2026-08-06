@@ -3,7 +3,7 @@
 -- not need to add up to 100, which makes adding a pet to a table painless.
 --
 -- BasicEgg costs ~2 minutes of Area1 play. Expected damage per hatch is about
--- 13, so ~2.5x your starting pet: a visible jump without trivialising Area1.
+-- 15, so ~3x your starting pet: a visible jump without trivialising Area1.
 
 export type Egg = {
 	displayName: string,
@@ -18,10 +18,11 @@ EggConfig.Eggs = {
 		displayName = "Basic Egg",
 		cost = 100,
 		weights = {
-			petTest = 60, -- 60%
-			Rocky = 27, -- 27%
-			Blaze = 11, -- 11%
-			Zephyr = 2, -- 2%
+			BonecaAmbalabu = 55, -- 55%
+			Madudung = 27, -- 27%
+			Garamararam = 12, -- 12%
+			BrrBrrPatapim = 5, -- 5%
+			LiriliLarila = 1, -- 1%
 		},
 	} :: Egg,
 }

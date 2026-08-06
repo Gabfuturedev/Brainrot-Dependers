@@ -102,6 +102,7 @@ type PetGroup = {
 local PetService = {}
 
 local groups: { [Player]: PetGroup } = {}
+local petTemplates: { [string]: Model } = {} -- model name -> rig, built once at start
 local petFolder: Folder
 local targetChangedRemote: RemoteEvent
 local lastRequest: { [Player]: number } = {}
@@ -138,23 +139,47 @@ local function warnOnce(key: string, message: string)
 	warn(message)
 end
 
--- Anchoring the root only carries the body with it if the body is jointed to
--- it. Skinned and Motor6D rigs are fine; a model whose parts are merely
--- positioned next to each other comes apart the moment we unanchor them below.
-local function warnIfUnjointed(model: Model)
-	local parts, joints = 0, 0
+-- Only the root gets anchored, so anything not jointed to it is left in free
+-- fall - and since prepareModel also clears CanCollide, it drops through the
+-- world rather than landing. The pet carries on following and attacking from an
+-- invisible HumanoidRootPart, which is a miserable thing to debug.
+--
+-- Toolbox rigs are frequently just a mesh sitting next to a root with nothing
+-- connecting them, so rather than demanding every model be built properly, weld
+-- whatever arrives loose. Parts that already have a joint are left alone: those
+-- are the ones an animation drives, and welding them would pin them still.
+local function weldLooseParts(model: Model, root: BasePart)
+	local jointed: { [BasePart]: boolean } = { [root] = true }
+
 	for _, descendant in model:GetDescendants() do
-		if descendant:IsA("BasePart") then
-			parts += 1
-		elseif descendant:IsA("JointInstance") or descendant:IsA("WeldConstraint") then
-			joints += 1
+		-- JointInstance covers Motor6D and Weld; WeldConstraint is a separate
+		-- class that happens to carry the same two properties
+		if descendant:IsA("JointInstance") or descendant:IsA("WeldConstraint") then
+			local a, b = descendant.Part0, descendant.Part1
+			if a then
+				jointed[a] = true
+			end
+			if b then
+				jointed[b] = true
+			end
 		end
 	end
 
-	if parts > 1 and joints == 0 then
+	local welded = 0
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and not jointed[descendant] then
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = root
+			weld.Part1 = descendant
+			weld.Parent = root
+			welded += 1
+		end
+	end
+
+	if welded > 0 then
 		warnOnce(
 			`{model.Name}/joints`,
-			`[PetService] {model.Name} has {parts} parts and no joints - everything but the HumanoidRootPart will fall off. Motor6D the body to the root.`
+			`[PetService] {model.Name} had {welded} part(s) jointed to nothing - welded them to the HumanoidRootPart. Motor6D them in the model to silence this.`
 		)
 	end
 end
@@ -170,8 +195,6 @@ local function prepareModel(model: Model)
 			descendant:Destroy()
 		end
 	end
-
-	warnIfUnjointed(model)
 
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BasePart") then
@@ -402,6 +425,45 @@ local function despawn(player: Player)
 	groups[player] = nil
 end
 
+-- Index every rig under ServerStorage.Pets by name, once, however deeply it is
+-- nested. Organise that folder however suits you - Area1Pets/Egg1/..., by egg,
+-- or flat - because nothing here reads the path. Which egg a pet drops from is
+-- already stated in EggConfig.weights, and saying it in the folder tree as well
+-- would give you two sources of truth free to disagree.
+--
+-- Done once rather than per spawn: pets rebuild on every equip change, and a
+-- recursive search of a growing library on each one adds up.
+local function indexTemplates()
+	local folder = ServerStorage:FindFirstChild("Pets")
+	if not folder then
+		warn("[PetService] ServerStorage has no 'Pets' folder (check spelling and capitalisation)")
+		return
+	end
+
+	local names: { string } = {}
+	for _, descendant in folder:GetDescendants() do
+		-- A rig, not an organising folder or a prop inside one. buildPet needs a
+		-- HumanoidRootPart anyway, so that is the honest test for "is this a pet".
+		if not descendant:IsA("Model") or not descendant:FindFirstChild("HumanoidRootPart") then
+			continue
+		end
+
+		local existing = petTemplates[descendant.Name]
+		if existing then
+			warn(
+				`[PetService] two pet models are both named '{descendant.Name}' ({existing:GetFullName()} and {descendant:GetFullName()}) - names must be unique, ignoring the second`
+			)
+			continue
+		end
+
+		petTemplates[descendant.Name] = descendant
+		table.insert(names, descendant.Name)
+	end
+
+	table.sort(names)
+	print(`[PetService] indexed {#names} pet model(s): {table.concat(names, ", ")}`)
+end
+
 local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet?
 	local stats = PetConfig.get(petName)
 	if not stats then
@@ -409,15 +471,26 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 		return nil
 	end
 
-	local petsFolder = ServerStorage:FindFirstChild("Pets")
-	if not petsFolder then
-		warn("[PetService] ServerStorage has no 'Pets' folder (check spelling and capitalisation)")
-		return nil
+	local template = petTemplates[stats.model]
+	if not template then
+		-- Fall back so a pet with no rig yet still spawns, but say so. Doing
+		-- this silently is exactly what lets every pet in the game wear the
+		-- same model for weeks with nothing in the output to explain it.
+		--
+		-- Resolved through PetConfig rather than looked up as a model name:
+		-- DefaultPet is a config key, and those deliberately differ from the
+		-- Studio asset names they point at.
+		local fallback = PetConfig.get(PetConfig.DefaultPet)
+		template = if fallback then petTemplates[fallback.model] else nil
+		if template then
+			warnOnce(
+				`{petName}/model`,
+				`[PetService] '{petName}' wants model '{stats.model}', which is not under ServerStorage.Pets - falling back to '{fallback and fallback.model}'`
+			)
+		end
 	end
 
-	-- fall back to the default model so a pet with no rig yet still works
-	local template = petsFolder:FindFirstChild(stats.model) or petsFolder:FindFirstChild(PetConfig.DefaultPet)
-	if not template or not template:IsA("Model") then
+	if not template then
 		warn(`[PetService] no usable model for '{petName}' (wanted '{stats.model}')`)
 		return nil
 	end
@@ -432,6 +505,10 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 		model:Destroy()
 		return nil
 	end
+
+	-- before the model is parented, so nothing has had a physics step to fall
+	-- away in, and while the rig is still in its authored pose
+	weldLooseParts(model, petRoot)
 
 	-- Measure the rig before we anchor it, so we know how high above the
 	-- ground the root has to sit for the feet to touch. Works for R6, R15
@@ -706,6 +783,8 @@ local function onAttackRequested(player: Player, part: any)
 end
 
 function PetService.start()
+	indexTemplates()
+
 	petFolder = Instance.new("Folder")
 	petFolder.Name = "Pets"
 	petFolder.Parent = Workspace

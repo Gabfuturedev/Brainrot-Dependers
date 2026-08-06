@@ -43,6 +43,7 @@ local equippedChanged = Instance.new("BindableEvent")
 -- Fires (player) whenever the equipped list changes, so PetService can respawn.
 PetInventoryService.EquippedChanged = equippedChanged.Event
 
+local chooseStarterRemote: RemoteEvent
 local hatchResult: RemoteEvent
 local inventoryUpdated: RemoteEvent
 
@@ -308,20 +309,52 @@ local function hatch(player: Player, eggName: string)
 	hatchResult:FireClient(player, petName, stats and stats.rarity or "Common")
 end
 
--- Give brand new players their starter pet so the game is playable at once.
+-- petName arrives on a remote, so it is checked against the starter list rather
+-- than trusted - otherwise this is a free hatch of anything in PetConfig.
+local function chooseStarter(player: Player, petName: any)
+	if typeof(petName) ~= "string" or not PetConfig.isStarter(petName) then
+		return
+	end
+
+	local data = DataService.getData(player)
+	if not data or data.starterChosen then
+		return -- one time only, however many times the remote is fired
+	end
+
+	-- flag only once the pet is actually theirs: marking it first would strand
+	-- a player with no pet and no way to be offered one again
+	if PetInventoryService.grantPet(player, petName) then
+		data.starterChosen = true
+	end
+end
+
+local function offerStarter(player: Player)
+	local data = DataService.getData(player)
+	if data and not data.starterChosen then
+		chooseStarterRemote:FireClient(player, PetConfig.Starters)
+	end
+end
+
 local function onProfileLoaded(player: Player)
 	local data = DataService.getData(player)
 	if not data then
 		return
 	end
 
-	if next(data.ownedPets) == nil then
-		PetInventoryService.grantPet(player, PetConfig.DefaultPet)
-	else
-		-- returning player: their equipped list is already in the profile
-		equippedChanged:Fire(player)
-		pushInventory(player)
+	if not data.starterChosen then
+		if next(data.ownedPets) == nil then
+			-- brand new: let them pick one rather than handing them one
+			offerStarter(player)
+			return
+		end
+		-- a profile from before starters existed, so there is nothing to
+		-- choose - they already have pets
+		data.starterChosen = true
 	end
+
+	-- returning player: their equipped list is already in the profile
+	equippedChanged:Fire(player)
+	pushInventory(player)
 end
 
 local function setupEgg(model: Instance, eggName: string)
@@ -355,8 +388,13 @@ local function setupEgg(model: Instance, eggName: string)
 end
 
 function PetInventoryService.start()
+	chooseStarterRemote = Remotes.get("ChooseStarter")
 	hatchResult = Remotes.get("HatchResult")
 	inventoryUpdated = Remotes.get("InventoryUpdated")
+
+	Remotes.get("RequestStarter").OnServerEvent:Connect(function(player, petName)
+		chooseStarter(player, petName)
+	end)
 
 	Remotes.get("RequestEquip").OnServerEvent:Connect(function(player, petId, shouldEquip)
 		setEquipped(player, petId, shouldEquip)
@@ -369,6 +407,24 @@ function PetInventoryService.start()
 	end)
 
 	DataService.ProfileLoaded:Connect(onProfileLoaded)
+
+	-- The profile can finish loading before the client has connected its
+	-- handler, in which case the offer above lands on nobody. Re-offering each
+	-- time a character spawns costs nothing and self-heals that race, and it is
+	-- a no-op the moment they have picked.
+	local function bind(player: Player)
+		player.CharacterAdded:Connect(function()
+			offerStarter(player)
+		end)
+	end
+
+	-- in Studio the local player can already exist by the time this runs, so
+	-- PlayerAdded alone would never bind them
+	for _, player in Players:GetPlayers() do
+		bind(player)
+	end
+	Players.PlayerAdded:Connect(bind)
+
 	Players.PlayerRemoving:Connect(function(player)
 		equippedChanged:Fire(player) -- lets PetService clean up
 	end)

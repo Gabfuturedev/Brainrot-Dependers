@@ -11,15 +11,15 @@ export type BreakableStats = {
 local BreakableConfig = {}
 
 BreakableConfig.Default = {
-	health = 100,
-	coinReward = 10,
+	health = 10,
+	coinReward = 100,
 	respawnTime = 3,
 } :: BreakableStats
 
 BreakableConfig.Areas = {
 	Area1 = {
-		health = 100,
-		coinReward = 10,
+		health = 10,
+		coinReward = 1000,
 		respawnTime = 3,
 	} :: BreakableStats,
 	-- The number that matters is coins per damage, not per break:

@@ -2,6 +2,7 @@
 -- Owns every breakable part: health, damage, destruction and respawning.
 -- Expects: Workspace/Areas/<AreaName>/Breakables/<any parts>
 
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -10,6 +11,14 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BreakableConfig = require(Shared.Config.BreakableConfig)
 local Remotes = require(Shared.Remotes)
+local Sound = require(Shared.Sound)
+
+-- Breaking is the moment the player earns something, and it used to be a part
+-- blinking to Transparency 1. The shrink is what gives it weight; the particles
+-- are what leave something on screen after the part has gone.
+local SHRINK_TIME = 0.18
+local SHRINK_SCALE = 0.1
+local BURST_PARTICLES = 18
 
 local AreaService = require(script.Parent.AreaService)
 local DropService = require(script.Parent.DropService)
@@ -21,6 +30,7 @@ type Breakable = {
 	maxHealth: number,
 	alive: boolean,
 	baseColor: Color3,
+	baseSize: Vector3, -- restored on respawn, since destroying shrinks the part
 	stats: BreakableConfig.BreakableStats,
 	-- damage each player has dealt this life, so the reward can be split
 	contributions: { [Player]: number },
@@ -47,6 +57,7 @@ local function register(part: BasePart, areaName: string)
 		maxHealth = stats.health,
 		alive = true,
 		baseColor = part.Color,
+		baseSize = part.Size,
 		stats = stats,
 		contributions = {},
 	}
@@ -62,6 +73,7 @@ local function respawn(entry: Breakable)
 	entry.alive = true
 	entry.contributions = {}
 	entry.part.Color = entry.baseColor
+	entry.part.Size = entry.baseSize
 	entry.part.Transparency = 0
 	entry.part.CanCollide = true
 	entry.part.CanQuery = true
@@ -88,11 +100,43 @@ local function payContributors(entry: Breakable)
 	end
 end
 
+-- Debris in the part's own colour, so this reads correctly whatever a given
+-- area's breakables are made of without needing per-area VFX config.
+local function burst(part: BasePart, color: Color3)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Color = ColorSequence.new(color)
+	emitter.Size = NumberSequence.new(0.6, 0.05)
+	emitter.Transparency = NumberSequence.new(0.1, 1)
+	emitter.Lifetime = NumberRange.new(0.35, 0.7)
+	emitter.Speed = NumberRange.new(9, 18)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-220, 220)
+	emitter.Acceleration = Vector3.new(0, -45, 0) -- chunks fall, they don't drift
+	emitter.Enabled = false -- one burst, not a stream
+	emitter.Parent = part
+
+	emitter:Emit(BURST_PARTICLES)
+	-- outlives the longest particle, then goes; the part itself is reused
+	Debris:AddItem(emitter, 2)
+end
+
 local function destroyBreakable(entry: Breakable)
 	entry.alive = false
-	entry.part.Transparency = 1
 	entry.part.CanCollide = false
 	entry.part.CanQuery = false
+
+	burst(entry.part, entry.baseColor)
+	Sound.playOn("Break", entry.part)
+
+	-- Shrink out instead of blinking out. Nothing waits on this: alive is
+	-- already false and the reward is paid below, so the visual is free to take
+	-- its time. Back/In squashes the part slightly first, which sells the hit.
+	TweenService:Create(
+		entry.part,
+		TweenInfo.new(SHRINK_TIME, Enum.EasingStyle.Back, Enum.EasingDirection.In),
+		{ Size = entry.baseSize * SHRINK_SCALE, Transparency = 1 }
+	):Play()
 
 	payContributors(entry)
 	task.spawn(respawn, entry)

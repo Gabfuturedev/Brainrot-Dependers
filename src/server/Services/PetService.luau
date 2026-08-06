@@ -23,6 +23,7 @@ local Remotes = require(Shared.Remotes)
 
 local BreakableService = require(script.Parent.BreakableService)
 local PetInventoryService = require(script.Parent.PetInventoryService)
+local VfxService = require(script.Parent.VfxService)
 
 local ATTACK_REQUEST_COOLDOWN = 0.1 -- cheap guard against remote spam
 local GROUND_RAY_UP = 8 -- start the ground ray this far above the pet
@@ -716,6 +717,15 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	local toTarget = target.Position - pet.basePosition
 	local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
 	pet.lungeDirection = if flat.Magnitude > 0.01 then flat.Unit else Vector3.zero
+
+	local effects = pet.stats.attackVfx
+	if #effects > 0 and toTarget.Magnitude > 0.01 then
+		-- on the face of the target pointing at the pet, using the same half
+		-- extent the reach check above uses, so the effect can never disagree
+		-- with the range test about where the rock's edge is
+		local impact = target.Position - toTarget.Unit * (target.Size.Magnitude / 2)
+		VfxService.playAt(effects[math.random(#effects)], impact)
+	end
 
 	-- BreakableService pays out: the reward is split between everyone who
 	-- damaged it, so we only care whether this hit finished it off

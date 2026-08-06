@@ -19,10 +19,10 @@ EggConfig.Eggs = {
 		cost = 100,
 		weights = {
 			BonecaAmbalabu = 55, -- 55%
-			Madudung = 27, -- 27%
-			Garamararam = 12, -- 12%
-			BrrBrrPatapim = 5, -- 5%
-			LiriliLarila = 1, -- 1%
+			LiriliLarila = 27, -- 27%
+			Madudung = 12, -- 12%
+			Garamararam = 5, -- 5%
+			BrrBrrPatapim = 1, -- 1%
 		},
 	} :: Egg,
 }

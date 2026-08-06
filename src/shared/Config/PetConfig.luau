@@ -22,6 +22,10 @@ export type PetStats = {
 	-- a pet that has a real walk cycle you uploaded yourself.
 	float: boolean,
 	hoverHeight: number, -- studs of clearance under a floating pet
+	-- Effect names under ServerStorage.VFX, one picked at random per hit. Three
+	-- variants is enough that a pet working on the same rock for a minute stops
+	-- looking like a looping GIF. Set to {} for a pet that hits without one.
+	attackVfx: { string },
 	-- Optional, and unnecessary for a floating pet. Set only for a rig with
 	-- real tracks; a walker with none falls back to Roblox's R6/R15 defaults.
 	animations: { idle: string, walk: string }?,
@@ -40,6 +44,10 @@ local BASE = {
 	searchRadius = 60,
 	float = true,
 	hoverHeight = 1.5,
+	-- Off: an impact effect twice a second per pet, three pets deep, is visual
+	-- noise on top of the lunge that already reads the hit. VfxService still
+	-- works - put names back here for a boss pet that has earned one.
+	attackVfx = {},
 }
 
 -- The key is save-data identity: it is written into profiles and into

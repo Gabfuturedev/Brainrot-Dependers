@@ -3,9 +3,13 @@
 -- appears and re-validates whatever comes back, so this only renders the
 -- options it was handed and reports which one was clicked.
 --
+-- This is the first screen anyone sees, so it is the loudest thing in the game:
+-- oversized outlined type, cards that punch in one after another, and the whole
+-- card tinted by rarity rather than a small coloured label on it.
+--
 -- Model previews are optional. The client cannot see ServerStorage.Pets, so a
--- card falls back to a plain label unless a copy of the rig is sitting in
--- ReplicatedStorage.StarterPreviews under the same name.
+-- card falls back to a large initial unless a copy of the rig is sitting in
+-- ReplicatedStorage.PetPreviews under the same name.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,43 +19,29 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local PetConfig = require(Shared.Config.PetConfig)
 local Remotes = require(Shared.Remotes)
 
-local PREVIEW_FOLDER = "StarterPreviews"
-local CARD_WIDTH = 180
-local CARD_HEIGHT = 280
+local PetViewport = require(script.Parent.PetViewport)
+local Theme = require(script.Parent.Theme)
+local UIKit = require(script.Parent.UIKit)
+
+local CARD_SIZE = UDim2.fromOffset(196, 300)
+local STAGGER = 0.07 -- seconds between each card arriving
 
 local player = Players.LocalPlayer
 
 local StarterPicker = {}
 
--- Frames the whole rig whatever its proportions, so a tall pet and a wide one
--- both fill the card instead of one overflowing and the other sitting tiny.
-local function addPreview(card: Frame, modelName: string): boolean
-	local folder = ReplicatedStorage:FindFirstChild(PREVIEW_FOLDER)
-	local template = folder and folder:FindFirstChild(modelName)
-	if not template or not template:IsA("Model") then
+-- Static three-quarter view that leans toward the cursor when its card is
+-- hovered. Pass spin = true instead for a slow turntable.
+local function addPreview(card: GuiObject, modelName: string): boolean
+	local viewport = PetViewport.create(modelName, { hoverTarget = card })
+	if not viewport then
 		return false
 	end
 
-	local viewport = Instance.new("ViewportFrame")
-	viewport.BackgroundTransparency = 1
-	viewport.Position = UDim2.fromOffset(0, 10)
-	viewport.Size = UDim2.new(1, 0, 0, 150)
+	viewport.Position = UDim2.fromOffset(0, 14)
+	viewport.Size = UDim2.new(1, 0, 0, 156)
+	viewport.ZIndex = 3
 	viewport.Parent = card
-
-	local model = template:Clone()
-	model.Parent = viewport
-
-	local camera = Instance.new("Camera")
-	camera.Parent = viewport
-	viewport.CurrentCamera = camera
-
-	local center, size = model:GetBoundingBox()
-	local distance = math.max(size.Magnitude, 1) * 1.1
-	camera.CFrame = CFrame.lookAt(
-		center.Position + Vector3.new(distance * 0.55, size.Y * 0.35, distance),
-		center.Position
-	)
-
 	return true
 end
 
@@ -63,6 +53,7 @@ function StarterPicker.start()
 	gui.Name = "StarterPicker"
 	gui.ResetOnSpawn = false
 	gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling -- so shadows sit behind
 	gui.DisplayOrder = 10 -- over every other panel; nothing else matters yet
 	gui.Enabled = false
 
@@ -70,45 +61,45 @@ function StarterPicker.start()
 	-- way out, and a dismissed picker would leave a player with no pet at all.
 	local scrim = Instance.new("Frame")
 	scrim.Size = UDim2.fromScale(1, 1)
-	scrim.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	scrim.BackgroundTransparency = 0.4
+	scrim.BackgroundColor3 = Theme.Color.Shadow
+	scrim.BackgroundTransparency = Theme.Transparency.Scrim
 	scrim.BorderSizePixel = 0
 	scrim.Parent = gui
 
-	local title = Instance.new("TextLabel")
+	local title = UIKit.label({
+		text = "PICK YOUR FIRST BRAINROT",
+		color = Theme.Color.Text,
+		size = Theme.TextSize.xl,
+		font = Theme.Font.Heavy,
+		outline = Theme.Stroke.heavy,
+	})
 	title.AnchorPoint = Vector2.new(0.5, 0)
-	title.BackgroundTransparency = 1
-	title.Position = UDim2.fromScale(0.5, 0.16)
-	title.Size = UDim2.fromOffset(600, 44)
-	title.Font = Enum.Font.GothamBold
-	title.Text = "Pick your first brainrot"
-	title.TextColor3 = Color3.fromRGB(255, 255, 255)
-	title.TextSize = 30
-	title.TextStrokeTransparency = 0.4
+	title.Position = UDim2.fromScale(0.5, 0.13)
+	title.Size = UDim2.fromOffset(720, 48)
 	title.Parent = scrim
 
-	local subtitle = Instance.new("TextLabel")
+	local subtitle = UIKit.label({
+		text = "You only choose once — they are all equally strong",
+		color = Theme.Color.TextMuted,
+		size = Theme.TextSize.sm,
+		outline = Theme.Stroke.thin,
+	})
 	subtitle.AnchorPoint = Vector2.new(0.5, 0)
-	subtitle.BackgroundTransparency = 1
-	subtitle.Position = UDim2.fromScale(0.5, 0.16)
-	subtitle.Size = UDim2.fromOffset(600, 76)
-	subtitle.Font = Enum.Font.GothamMedium
-	subtitle.Text = "You only get to choose once. They are all equally strong."
-	subtitle.TextColor3 = Color3.fromRGB(190, 190, 205)
-	subtitle.TextSize = 15
+	subtitle.Position = UDim2.fromScale(0.5, 0.13)
+	subtitle.Size = UDim2.fromOffset(720, 86)
 	subtitle.Parent = scrim
 
 	local row = Instance.new("Frame")
-	row.AnchorPoint = Vector2.new(0.5, 0.5)
 	row.BackgroundTransparency = 1
-	row.Position = UDim2.fromScale(0.5, 0.52)
-	row.Size = UDim2.fromOffset(0, CARD_HEIGHT)
+	row.AnchorPoint = Vector2.new(0.5, 0.5)
+	row.Position = UDim2.fromScale(0.5, 0.53)
+	row.Size = UDim2.fromOffset(0, CARD_SIZE.Y.Offset)
 	row.AutomaticSize = Enum.AutomaticSize.X
 	row.Parent = scrim
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.Padding = UDim.new(0, 18)
+	layout.Padding = UDim.new(0, Theme.Space.lg)
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.VerticalAlignment = Enum.VerticalAlignment.Center
 	layout.Parent = row
@@ -116,7 +107,7 @@ function StarterPicker.start()
 	gui.Parent = playerGui
 
 	-- Guards a double-click: the server ignores the second, but leaving the
-	-- picker up while the first is being granted reads as the click not landing.
+	-- picker up while the first is granted reads as the click not landing.
 	local picked = false
 
 	local function addCard(order: number, petName: string)
@@ -125,91 +116,83 @@ function StarterPicker.start()
 			return -- config and server disagree; skip rather than render a blank
 		end
 
-		local accent = PetConfig.RarityColors[stats.rarity] or Color3.fromRGB(200, 200, 200)
+		local accent = PetConfig.RarityColors[stats.rarity] or Theme.Color.Primary
 
 		local card = Instance.new("TextButton")
-		card.Size = UDim2.fromOffset(CARD_WIDTH, CARD_HEIGHT)
-		card.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+		card.BackgroundColor3 = Theme.Color.SurfaceRaised
 		card.BorderSizePixel = 0
-		card.Text = ""
 		card.AutoButtonColor = false
+		card.Text = ""
+		card.Size = CARD_SIZE
 		card.LayoutOrder = order
+		card.ZIndex = 2
 		card.Parent = row
 
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 14)
-		corner.Parent = card
-
-		local stroke = Instance.new("UIStroke")
-		stroke.Color = accent
-		stroke.Thickness = 2
-		stroke.Transparency = 0.55
-		stroke.Parent = card
+		UIKit.corner(card, Theme.Radius.lg)
+		UIKit.gradient(card, Theme.Gradient.normal)
+		UIKit.shadow(card, 6)
+		local outline = UIKit.stroke(card, Theme.Stroke.heavy, accent)
 
 		if not addPreview(card, stats.model) then
-			-- no replicated copy of the rig: name the pet large instead, so the
-			-- card still reads as something rather than an empty box
-			local placeholder = Instance.new("TextLabel")
-			placeholder.BackgroundTransparency = 1
-			placeholder.Position = UDim2.fromOffset(10, 10)
-			placeholder.Size = UDim2.new(1, -20, 0, 150)
-			placeholder.Font = Enum.Font.GothamBold
-			placeholder.Text = "?"
-			placeholder.TextColor3 = accent
-			placeholder.TextSize = 64
-			placeholder.TextTransparency = 0.6
-			placeholder.Parent = card
+			local initial = UIKit.label({
+				text = string.sub(stats.displayName, 1, 1),
+				color = accent,
+				size = Theme.TextSize.hero,
+				font = Theme.Font.Heavy,
+				outline = Theme.Stroke.thick,
+			})
+			initial.Position = UDim2.fromOffset(0, 14)
+			initial.Size = UDim2.new(1, 0, 0, 156)
+			initial.ZIndex = 3
+			initial.Parent = card
 		end
 
-		local name = Instance.new("TextLabel")
-		name.BackgroundTransparency = 1
-		name.Position = UDim2.fromOffset(10, 168)
-		name.Size = UDim2.new(1, -20, 0, 44)
-		name.Font = Enum.Font.GothamBold
-		name.Text = stats.displayName
-		name.TextColor3 = accent
-		name.TextSize = 17
+		local name = UIKit.label({
+			text = stats.displayName,
+			color = Theme.Color.Text,
+			size = Theme.TextSize.md,
+			font = Theme.Font.Heavy,
+			outline = Theme.Stroke.thin,
+		})
+		name.Position = UDim2.fromOffset(Theme.Space.sm, 178)
+		name.Size = UDim2.new(1, -Theme.Space.sm * 2, 0, 46)
 		name.TextWrapped = true
+		name.ZIndex = 3
 		name.Parent = card
 
-		local detail = Instance.new("TextLabel")
-		detail.BackgroundTransparency = 1
-		detail.Position = UDim2.fromOffset(10, 212)
-		detail.Size = UDim2.new(1, -20, 0, 20)
-		detail.Font = Enum.Font.GothamMedium
-		detail.Text = `{stats.damage} dmg`
-		detail.TextColor3 = Color3.fromRGB(170, 170, 185)
-		detail.TextSize = 14
-		detail.Parent = card
+		local damage = UIKit.label({
+			text = `{stats.damage} DMG`,
+			color = Theme.Color.TextMuted,
+			size = Theme.TextSize.xs,
+			outline = Theme.Stroke.thin,
+		})
+		damage.Position = UDim2.fromOffset(0, 224)
+		damage.Size = UDim2.new(1, 0, 0, 18)
+		damage.ZIndex = 3
+		damage.Parent = card
 
-		local choose = Instance.new("TextLabel")
+		local choose = UIKit.button({ text = "CHOOSE", color = accent, textSize = Theme.TextSize.sm })
 		choose.AnchorPoint = Vector2.new(0.5, 1)
-		choose.BackgroundColor3 = accent
-		choose.BorderSizePixel = 0
-		choose.Position = UDim2.new(0.5, 0, 1, -12)
-		choose.Size = UDim2.new(1, -24, 0, 32)
-		choose.Font = Enum.Font.GothamBold
-		choose.Text = "Choose"
-		choose.TextColor3 = Color3.fromRGB(20, 20, 26)
-		choose.TextSize = 14
+		choose.Position = UDim2.new(0.5, 0, 1, -Theme.Space.md)
+		choose.Size = UDim2.new(1, -Theme.Space.xl, 0, 40)
+		choose.TextColor3 = Theme.Color.Text
+		choose.ZIndex = 3
+		choose.Active = false -- the whole card is the click target
 		choose.Parent = card
 
-		local chooseCorner = Instance.new("UICorner")
-		chooseCorner.CornerRadius = UDim.new(0, 8)
-		chooseCorner.Parent = choose
-
 		card.MouseEnter:Connect(function()
-			if not picked then
-				stroke.Transparency = 0
-				TweenService:Create(card, TweenInfo.new(0.12), {
-					BackgroundColor3 = Color3.fromRGB(38, 38, 50),
-				}):Play()
+			if picked then
+				return
 			end
+			outline.Thickness = Theme.Stroke.heavy + 1
+			TweenService:Create(card, Theme.Motion.Fast, {
+				BackgroundColor3 = Theme.Color.SurfaceHover,
+			}):Play()
 		end)
 		card.MouseLeave:Connect(function()
-			stroke.Transparency = 0.55
-			TweenService:Create(card, TweenInfo.new(0.12), {
-				BackgroundColor3 = Color3.fromRGB(28, 28, 38),
+			outline.Thickness = Theme.Stroke.heavy
+			TweenService:Create(card, Theme.Motion.Fast, {
+				BackgroundColor3 = Theme.Color.SurfaceRaised,
 			}):Play()
 		end)
 
@@ -220,6 +203,14 @@ function StarterPicker.start()
 			picked = true
 			requestStarter:FireServer(petName)
 			gui.Enabled = false
+		end)
+
+		-- staggered arrival, so three cards read as dealt rather than as one
+		-- block appearing
+		task.delay((order - 1) * STAGGER, function()
+			if card.Parent then
+				UIKit.popIn(card, CARD_SIZE)
+			end
 		end)
 	end
 

@@ -7,8 +7,12 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
+local Theme = require(script.Parent.Theme)
+local UIKit = require(script.Parent.UIKit)
+
 local COUNT_SPEED = 6 -- higher rolls the number up faster
-local PUNCH_TWEEN = TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local REST_SIZE = UDim2.fromOffset(206, 56)
+local PUNCH_SIZE = UDim2.fromOffset(222, 62)
 
 local player = Players.LocalPlayer
 
@@ -38,50 +42,61 @@ function CoinDisplay.start()
 	gui.IgnoreGuiInset = true
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
-	local container = Instance.new("Frame")
+	-- Sunken body with a gold coin disc sitting proud of it, rather than a flat
+	-- bar with an emoji in it. The disc is what makes this read as currency at
+	-- a glance instead of as a number in a box.
+	local container = UIKit.surface({
+		color = Theme.Color.SurfaceSunken,
+		radius = Theme.Radius.pill,
+		stroke = Theme.Stroke.heavy,
+		shadow = 4,
+	})
 	container.Name = "Container"
 	container.AnchorPoint = Vector2.new(0.5, 0)
 	container.Position = UDim2.new(0.5, 0, 0, 16)
-	container.Size = UDim2.fromOffset(190, 48)
-	container.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-	container.BackgroundTransparency = 0.15
-	container.BorderSizePixel = 0
+	container.Size = REST_SIZE
 	container.Parent = gui
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 12)
-	corner.Parent = container
+	local disc = UIKit.surface({
+		color = Theme.Color.Coin,
+		radius = Theme.Radius.pill,
+		stroke = Theme.Stroke.thick,
+		gradient = Theme.Gradient.strong,
+	})
+	disc.Name = "Disc"
+	disc.AnchorPoint = Vector2.new(0, 0.5)
+	disc.Position = UDim2.new(0, 6, 0.5, 0)
+	disc.Size = UDim2.fromOffset(44, 44)
+	disc.ZIndex = 3
+	disc.Parent = container
 
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(255, 200, 60)
-	stroke.Thickness = 2
-	stroke.Transparency = 0.3
-	stroke.Parent = container
+	local symbol = UIKit.label({
+		text = "$",
+		color = Theme.Color.Outline,
+		size = Theme.TextSize.lg,
+		font = Theme.Font.Heavy,
+	})
+	symbol.Name = "Symbol"
+	symbol.Size = UDim2.fromScale(1, 1)
+	symbol.ZIndex = 4
+	symbol.Parent = disc
 
-	local icon = Instance.new("TextLabel")
-	icon.Name = "Icon"
-	icon.BackgroundTransparency = 1
-	icon.Position = UDim2.fromOffset(10, 0)
-	icon.Size = UDim2.new(0, 34, 1, 0)
-	icon.Font = Enum.Font.GothamBold
-	icon.Text = "🪙"
-	icon.TextSize = 24
-	icon.Parent = container
-
-	local amount = Instance.new("TextLabel")
+	local amount = UIKit.label({
+		text = abbreviate(coins.Value),
+		color = Theme.Color.Text,
+		font = Theme.Font.Heavy,
+		align = Enum.TextXAlignment.Left,
+		outline = Theme.Stroke.thick,
+	})
 	amount.Name = "Amount"
-	amount.BackgroundTransparency = 1
-	amount.Position = UDim2.fromOffset(46, 0)
-	amount.Size = UDim2.new(1, -56, 1, 0)
-	amount.Font = Enum.Font.GothamBold
-	amount.TextColor3 = Color3.fromRGB(255, 214, 92)
+	amount.Position = UDim2.fromOffset(60, 0)
+	amount.Size = UDim2.new(1, -74, 1, 0)
 	amount.TextScaled = true
-	amount.TextXAlignment = Enum.TextXAlignment.Left
-	amount.Text = abbreviate(coins.Value)
+	amount.ZIndex = 3
 	amount.Parent = container
 
 	local sizeConstraint = Instance.new("UITextSizeConstraint")
-	sizeConstraint.MaxTextSize = 28
+	sizeConstraint.MaxTextSize = Theme.TextSize.lg
 	sizeConstraint.Parent = amount
 
 	gui.Parent = playerGui
@@ -100,10 +115,10 @@ function CoinDisplay.start()
 
 	-- small pop each time coins come in, so gains register in peripheral vision
 	coins.Changed:Connect(function()
-		container.Size = UDim2.fromOffset(190, 48)
-		TweenService:Create(container, PUNCH_TWEEN, { Size = UDim2.fromOffset(204, 52) }):Play()
-		task.delay(PUNCH_TWEEN.Time, function()
-			TweenService:Create(container, PUNCH_TWEEN, { Size = UDim2.fromOffset(190, 48) }):Play()
+		container.Size = REST_SIZE
+		TweenService:Create(container, Theme.Motion.Pop, { Size = PUNCH_SIZE }):Play()
+		task.delay(Theme.Motion.Pop.Time, function()
+			TweenService:Create(container, Theme.Motion.Pop, { Size = REST_SIZE }):Play()
 		end)
 	end)
 end

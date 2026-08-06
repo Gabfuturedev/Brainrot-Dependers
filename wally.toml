@@ -1,0 +1,12 @@
+[package]
+name = "gabriel/robloxgames"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+# React Lua is Roblox's own port of React 17. react-roblox is the renderer that
+# turns the element tree into Instances - the pair is required, same as
+# react + react-dom on the web. Both must stay on the same version.
+[dependencies]
+React = "jsdotlua/react@17.2.1"
+ReactRoblox = "jsdotlua/react-roblox@17.2.1"

@@ -54,11 +54,14 @@ Each plot under `Workspace.Plot` (named `1`–`6`) is expected to contain:
 | --- | --- | --- |
 | `Spawn` | `BasePart` | where the owner spawns |
 | `Core` | `BasePart` or `Model` | the thing being defended |
-| `Posts` | `Folder` of `BasePart` | where brainrots stand |
 | `EnemySpawns` | `Folder` of `BasePart` | where enemies enter |
 
 Anything missing is warned about once, not fatal — a half-built plot still
 loads.
+
+Brainrots ring the core rather than standing on placed posts. Fixed posts are
+placement strategy, which belongs after we know defending is fun; a ring needs
+nothing built and covers every approach, where a placed line only covers one.
 
 ## What carries over
 
@@ -84,7 +87,7 @@ attributes off any part and does not know what a breakable is.
 1. **Plot assignment** — one player, one plot, spawn there
 2. **One enemy** walking to one core, killed by existing pet combat
 3. Base health and repair
-4. Posts and stationing
+4. Placement — only if ringing the core turns out to be too passive
 5. Waves and scaling
 6. Base upgrades
 

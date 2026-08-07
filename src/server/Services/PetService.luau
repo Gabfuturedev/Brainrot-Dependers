@@ -22,7 +22,9 @@ local PetConfig = require(Shared.Config.PetConfig)
 local Remotes = require(Shared.Remotes)
 
 local BreakableService = require(script.Parent.BreakableService)
+local EnemyService = require(script.Parent.EnemyService)
 local PetInventoryService = require(script.Parent.PetInventoryService)
+local PlotService = require(script.Parent.PlotService)
 local VfxService = require(script.Parent.VfxService)
 
 local ATTACK_REQUEST_COOLDOWN = 0.1 -- cheap guard against remote spam
@@ -98,6 +100,10 @@ type PetGroup = {
 	owner: Player,
 	pets: { Pet },
 	target: BasePart?,
+	-- What the group guards. The plot's Core when the owner has a plot, and the
+	-- owner themselves otherwise, so a plotless player still gets followers
+	-- rather than pets stranded at the origin.
+	home: BasePart,
 }
 
 local PetService = {}
@@ -573,9 +579,14 @@ local function refresh(player: Player)
 		return
 	end
 
-	local group: PetGroup = { owner = player, pets = {}, target = nil }
+	-- Equipping is deployment now: these pets guard the core whether or not the
+	-- owner is standing there, which is the whole point of a defence you can
+	-- walk away from.
+	local home = PlotService.getPart(player, "Core") or ownerRoot
+
+	local group: PetGroup = { owner = player, pets = {}, target = nil, home = home }
 	for slot, petName in names do
-		local pet = buildPet(petName, slot, ownerRoot)
+		local pet = buildPet(petName, slot, home)
 		if pet then
 			table.insert(group.pets, pet)
 		end
@@ -630,13 +641,20 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	local count = #group.pets
 	local target = group.target
 
-	-- ring around the target while attacking, row behind the owner while idle
+	-- Ring around the target while attacking, ring around home while idle.
+	--
+	-- A ring rather than the row they used to hold behind the owner: a core
+	-- needs covering from every side, and a row only guards one approach.
 	local goal: Vector3
 	if target then
 		local standoff = target.Size.Magnitude / 2 + pet.stats.attackRange * 0.4
 		goal = target.Position + slotOffset(pet.slot, count, standoff)
-	else
+	elseif group.home == ownerRoot then
+		-- no plot: fall back to trailing the owner, as they always did
 		goal = ownerRoot.Position + followOffset(ownerRoot, pet.slot, count, pet.stats.followDistance)
+	else
+		local guardRadius = group.home.Size.Magnitude / 2 + pet.stats.followDistance
+		goal = group.home.Position + slotOffset(pet.slot, count, guardRadius)
 	end
 
 	-- movement works off basePosition, not the rendered root: reading back a
@@ -710,6 +728,7 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	end
 
 	pet.lastAttack = now
+	local isEnemy = EnemyService.isAlive(target)
 
 	-- Aim the strike now and keep it, rather than re-deriving it each frame: a
 	-- killing blow clears the target immediately, and the lunge should still
@@ -727,9 +746,13 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 		VfxService.playAt(effects[math.random(#effects)], impact)
 	end
 
-	-- BreakableService pays out: the reward is split between everyone who
-	-- damaged it, so we only care whether this hit finished it off
-	if BreakableService.damage(target, pet.stats.damage, group.owner) then
+	-- Whichever service owns this target pays out: the reward is split between
+	-- everyone who damaged it, so we only care whether this hit finished it off.
+	local killed = if isEnemy
+		then EnemyService.damage(target, pet.stats.damage, group.owner)
+		else BreakableService.damage(target, pet.stats.damage, group.owner)
+
+	if killed then
 		assignTarget(group, nil)
 	end
 end
@@ -740,17 +763,35 @@ local function updateGroup(group: PetGroup, deltaTime: number, now: number)
 		return
 	end
 
-	-- drop the target if it died, was removed, or the owner walked away.
-	-- Nothing re-acquires automatically - the player has to click again.
+	local range = group.pets[1] and group.pets[1].stats.searchRadius or 60
+
+	-- Measured from home, not from the owner. Searching around the player would
+	-- mean walking to the hatchery takes your defenders' attention with you,
+	-- which is exactly the failure this design exists to avoid.
+	local anchor = group.home.Position
+
+	-- drop the target if it died, was removed, or drifted out of range of home
 	local target = group.target
 	if target then
-		local range = group.pets[1] and group.pets[1].stats.searchRadius or 60
 		if
 			not target.Parent
-			or not BreakableService.isAlive(target)
-			or (target.Position - ownerRoot.Position).Magnitude > range
+			or not (EnemyService.isAlive(target) or BreakableService.isAlive(target))
+			or (target.Position - anchor).Magnitude > range
 		then
 			assignTarget(group, nil)
+			target = nil
+		end
+	end
+
+	-- Enemies are picked up without being asked for. Defending cannot depend on
+	-- the player clicking - they are meant to be off at the hatchery while this
+	-- happens, which is the whole reason the map has a centre.
+	--
+	-- Breakables still need a click, so a manual target is never overridden.
+	if not target then
+		local nearest = EnemyService.findNearest(anchor, range)
+		if nearest then
+			assignTarget(group, nearest)
 		end
 	end
 

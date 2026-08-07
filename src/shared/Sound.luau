@@ -9,6 +9,7 @@
 
 local Debris = game:GetService("Debris")
 local SoundService = game:GetService("SoundService")
+local Workspace = game:GetService("Workspace")
 
 local SoundConfig = require(script.Parent.Config.SoundConfig)
 
@@ -70,6 +71,40 @@ function Sound.play2d(name: string, pitch: number?)
 
 	sound.Parent = SoundService
 	playAndDiscard(sound)
+end
+
+-- Positional, on a carrier part of its own at a fixed point.
+--
+-- For anything that dies at the moment it makes a sound. playOn parents the
+-- Sound to the part, which is right for a breakable that respawns - but an
+-- enemy is destroyed on the killing blow, taking the Sound with it before a
+-- single sample plays.
+function Sound.playAt(name: string, position: Vector3, pitch: number?)
+	local sound = build(name, pitch)
+	if not sound then
+		return
+	end
+
+	local carrier = Instance.new("Part")
+	carrier.Name = "SoundCarrier"
+	carrier.Anchored = true
+	carrier.CanCollide = false
+	carrier.CanQuery = false
+	carrier.CanTouch = false
+	carrier.Transparency = 1
+	carrier.Size = Vector3.one
+	carrier.CFrame = CFrame.new(position)
+	carrier.Parent = Workspace
+
+	sound.RollOffMaxDistance = ROLLOFF_MAX
+	sound.RollOffMode = Enum.RollOffMode.InverseTapered
+	sound.Parent = carrier
+	sound:Play()
+
+	sound.Ended:Once(function()
+		carrier:Destroy()
+	end)
+	Debris:AddItem(carrier, CLEANUP_AFTER)
 end
 
 -- Positional, parented to the part it belongs to. Parenting rather than

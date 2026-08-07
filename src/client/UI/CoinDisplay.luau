@@ -4,8 +4,12 @@
 -- are readable.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Format = require(Shared.Format)
 
 local Theme = require(script.Parent.Theme)
 local UIKit = require(script.Parent.UIKit)
@@ -18,18 +22,7 @@ local player = Players.LocalPlayer
 
 local CoinDisplay = {}
 
--- 1234567 -> "1.2M". Simulators outgrow plain numbers fast.
-local function abbreviate(value: number): string
-	local n = math.floor(value)
-	if n >= 1_000_000_000 then
-		return string.format("%.1fB", n / 1_000_000_000)
-	elseif n >= 1_000_000 then
-		return string.format("%.1fM", n / 1_000_000)
-	elseif n >= 1_000 then
-		return string.format("%.1fK", n / 1_000)
-	end
-	return tostring(n)
-end
+local abbreviate = Format.abbreviate
 
 function CoinDisplay.start()
 	local playerGui = player:WaitForChild("PlayerGui")

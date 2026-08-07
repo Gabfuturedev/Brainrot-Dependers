@@ -50,6 +50,12 @@ local function register(part: BasePart, areaName: string)
 	part.Anchored = true
 	part.CanQuery = true -- must be raycastable or the player can never click it
 
+	-- Health goes out as attributes rather than a remote. They replicate on
+	-- their own, everyone sees the same number without the server broadcasting
+	-- to each client, and the client is free to draw it however it likes.
+	part:SetAttribute("MaxHealth", stats.health)
+	part:SetAttribute("Health", stats.health)
+
 	breakables[part] = {
 		part = part,
 		areaName = areaName,
@@ -77,6 +83,7 @@ local function respawn(entry: Breakable)
 	entry.part.Transparency = 0
 	entry.part.CanCollide = true
 	entry.part.CanQuery = true
+	entry.part:SetAttribute("Health", entry.maxHealth)
 end
 
 -- Spawns drops for every player who damaged this breakable, in proportion to
@@ -164,6 +171,10 @@ function BreakableService.damage(part: BasePart, amount: number, attacker: Playe
 	if attacker then
 		entry.contributions[attacker] = (entry.contributions[attacker] or 0) + dealt
 	end
+
+	-- clamped, because entry.health is allowed to go negative on an overkill
+	-- and a health bar should not be asked to draw that
+	entry.part:SetAttribute("Health", math.max(entry.health, 0))
 
 	if entry.health <= 0 then
 		destroyBreakable(entry)

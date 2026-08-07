@@ -11,6 +11,10 @@ export type PetStats = {
 	model: string, -- model name under ServerStorage.Pets
 	rarity: string,
 	damage: number,
+	-- Taken by enemies during a wave. A downed brainrot is out until the wave
+	-- ends, never destroyed - the economy is collecting these, and losing one
+	-- permanently would fight that. See GAME.md.
+	health: number,
 	attackCooldown: number, -- seconds between hits
 	attackRange: number, -- studs from target before it can hit
 	followDistance: number, -- radius of the orbit around the owner when idle
@@ -37,6 +41,7 @@ local BASE = {
 	model = "petTest",
 	rarity = "Common",
 	damage = 500,
+	health = 120,
 	attackCooldown = 0.5,
 	attackRange = 8,
 	followDistance = 7,

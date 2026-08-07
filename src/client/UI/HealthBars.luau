@@ -19,8 +19,10 @@ local Theme = require(script.Parent.Theme)
 local UIKit = require(script.Parent.UIKit)
 
 -- Top-level Workspace folders to watch. Breakables live under Areas, enemies
--- under Enemies, and neither is guaranteed to exist when this runs.
-local WATCHED = { "Areas", "Enemies" }
+-- under Enemies, brainrots under Pets, and none is guaranteed to exist when
+-- this runs. Adding a folder here is all it takes to give a new kind of thing
+-- a health bar - this module never learns what any of them are.
+local WATCHED = { "Areas", "Enemies", "Pets" }
 
 local WIDTH = 132
 local HEIGHT = 34

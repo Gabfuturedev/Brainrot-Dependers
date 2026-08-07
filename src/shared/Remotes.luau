@@ -6,7 +6,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local REMOTE_NAMES = {
-	"BreakableDamaged", -- server -> client: (part, damage) for hit numbers
+	-- The two halves of a fight, from the owner's point of view. Dealt is your
+	-- side hurting something; Taken is something hurting yours. Both carry
+	-- (part, amount) and both are sent only to the player they concern.
+	"DamageDealt", -- server -> client: (part, amount) your brainrots landed a hit
+	"DamageTaken", -- server -> client: (part, amount) one of your brainrots was hit
 	"DropCollected", -- server -> client: (position, value) when a drop is picked up
 	"RequestAttack", -- client -> server: (part) the player clicked
 	"PetTargetChanged", -- server -> client: (part?) what the pet is actually attacking

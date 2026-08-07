@@ -21,7 +21,6 @@ local OWNER_ATTRIBUTE = "OwnerUserId"
 local EXPECTED = {
 	{ name = "Spawn", kind = "BasePart" },
 	{ name = "Core", kind = "PVInstance" },
-	{ name = "Posts", kind = "Folder" },
 	{ name = "EnemySpawns", kind = "Folder" },
 }
 

@@ -17,6 +17,7 @@ local REMOTE_NAMES = {
 	"RequestBulkDelete", -- client -> server: (rarity?) every unequipped pet of that rarity, nil for all
 	"RequestEquipBest", -- client -> server: () swap the equipped set to the strongest owned
 	"RequestHatch", -- client -> server: (eggName, count) hatch from an egg you are standing at
+	"RequestStartWave", -- client -> server: () send the next wave at your own core
 	"AreasUpdated", -- server -> client: (unlockedAreas) so barriers can open
 	"ChooseStarter", -- server -> client: (petNames) offer the one-time starter pick
 	"RequestStarter", -- client -> server: (petName) the starter they picked

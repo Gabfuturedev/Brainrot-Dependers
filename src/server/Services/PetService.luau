@@ -79,6 +79,7 @@ local WALK_PATTERNS = { "walk", "run", "move" }
 type Pet = {
 	model: Model,
 	root: BasePart,
+	id: string, -- the owned-pet id, so a downed one can be told from its twins
 	stats: PetConfig.PetStats,
 	slot: number, -- 1-based position in the orbit
 	lastAttack: number,
@@ -100,18 +101,38 @@ type PetGroup = {
 	owner: Player,
 	pets: { Pet },
 	target: BasePart?,
-	-- What the group guards. The plot's Core when the owner has a plot, and the
-	-- owner themselves otherwise, so a plotless player still gets followers
-	-- rather than pets stranded at the origin.
-	home: BasePart,
+	-- The plot's Core, if they have one. Brainrots ring it during a wave and
+	-- trail the owner the rest of the time, so this is the anchor only while
+	-- defending - see anchorFor.
+	core: BasePart?,
+	-- Which way the threat comes from, seen from the core. The guard formation
+	-- turns to face it, so a pair stands between the core and the door rather
+	-- than at whatever compass bearing the maths happened to start from.
+	guardFacing: Vector3?,
 }
 
 local PetService = {}
 
 local groups: { [Player]: PetGroup } = {}
+
+-- Brainrots downed this wave, by owned-pet id. They are not respawned until the
+-- wave ends, which is the whole stake: lose your defenders and the rest of the
+-- wave walks in. Nothing is destroyed - the id stays in the profile untouched.
+local downed: { [Player]: { [string]: boolean } } = {}
+
+-- What the group holds position around right now. During a wave that is the
+-- core, so the defence stands whether or not the owner does; otherwise it is
+-- the owner, and they trail behind like the pets they were before the sirens.
+local function anchorFor(group: PetGroup, ownerRoot: BasePart): BasePart
+	if group.core and EnemyService.isWaveActive(group.owner) then
+		return group.core
+	end
+	return ownerRoot
+end
 local petTemplates: { [string]: Model } = {} -- model name -> rig, built once at start
 local petFolder: Folder
 local targetChangedRemote: RemoteEvent
+local damageTakenRemote: RemoteEvent
 local lastRequest: { [Player]: number } = {}
 
 -- Single place that mutates the target, so the client is always told.
@@ -385,9 +406,30 @@ local function groundHeight(position: Vector3, fallback: number): number
 	return if result then result.Position.Y else fallback
 end
 
--- Evenly spaced point on a ring, so pets never pile onto the same spot.
-local function slotOffset(slot: number, count: number, radius: number): Vector3
-	local angle = (slot - 1) / math.max(count, 1) * math.pi * 2
+-- Point on a ring, so pets never pile onto the same spot.
+--
+-- Three or more spread over the full circle - the triangle at three reads well
+-- and covers every approach. One or two get a narrow arc instead: an even split
+-- of a full circle puts two brainrots 180 degrees apart, which strands one
+-- directly behind the core where nothing ever comes from, and off the edge
+-- entirely when the plot sits near the border of the map.
+--
+-- `facing` turns the whole formation to point at something. Without it the ring
+-- starts at world +X, which is meaningless on a plot and is why the stranded
+-- one always ended up in the same wrong place.
+local SMALL_GROUP_ARC = math.rad(100)
+
+local function slotOffset(slot: number, count: number, radius: number, facing: Vector3?): Vector3
+	local base = if facing then math.atan2(facing.Z, facing.X) else 0
+
+	local angle: number
+	if count >= 3 then
+		angle = base + (slot - 1) / count * math.pi * 2
+	else
+		local spread = if count > 1 then SMALL_GROUP_ARC else 0
+		angle = base - spread / 2 + (slot - 1) / math.max(count - 1, 1) * spread
+	end
+
 	return Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 end
 
@@ -471,7 +513,7 @@ local function indexTemplates()
 	print(`[PetService] indexed {#names} pet model(s): {table.concat(names, ", ")}`)
 end
 
-local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet?
+local function buildPet(petName: string, petId: string, slot: number, ownerRoot: BasePart): Pet?
 	local stats = PetConfig.get(petName)
 	if not stats then
 		warn(`[PetService] no stats configured for '{petName}'`)
@@ -536,9 +578,15 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 	petRoot.CFrame = CFrame.new(basePosition)
 	model.Parent = petFolder
 
+	-- HealthBars reads these; a brainrot in a fight gets a bar like anything
+	-- else, with nothing extra told to anyone
+	petRoot:SetAttribute("MaxHealth", stats.health)
+	petRoot:SetAttribute("Health", stats.health)
+
 	local pet: Pet = {
 		model = model,
 		root = petRoot,
+		id = petId,
 		stats = stats,
 		slot = slot,
 		lastAttack = 0,
@@ -559,6 +607,100 @@ local function buildPet(petName: string, slot: number, ownerRoot: BasePart): Pet
 	return pet
 end
 
+-- Closest living brainrot to `position`, excluding its own owner's enemies -
+-- an enemy only ever swings at the brainrots on the plot it is walking across.
+function PetService.findNearestPet(position: Vector3, radius: number, owner: Player): BasePart?
+	local group = groups[owner]
+	if not group then
+		return nil
+	end
+
+	local closest: BasePart? = nil
+	local closestDistance = radius
+
+	for _, pet in group.pets do
+		if not pet.root.Parent then
+			continue
+		end
+		local distance = (pet.root.Position - position).Magnitude
+		if distance < closestDistance then
+			closest = pet.root
+			closestDistance = distance
+		end
+	end
+
+	return closest
+end
+
+-- Returns true if this downed it. Health is an attribute, so HealthBars draws
+-- the bar over a brainrot exactly as it does over anything else.
+function PetService.damagePet(part: BasePart, amount: number): boolean
+	for owner, group in groups do
+		for index, pet in group.pets do
+			if pet.root ~= part then
+				continue
+			end
+
+			local health = math.max((part:GetAttribute("Health") :: number? or 0) - amount, 0)
+			part:SetAttribute("Health", health)
+
+			-- only the owner is told: another player's brainrot being chewed on
+			-- is not their fight and would just be numbers over someone else
+			damageTakenRemote:FireClient(owner, part, amount)
+
+			if health > 0 then
+				return false
+			end
+
+			-- Down, not dead. The id is remembered so refresh skips it until
+			-- the wave ends; the pet itself is untouched in the profile.
+			downed[owner] = downed[owner] or {}
+			downed[owner][pet.id] = true
+
+			pet.model:Destroy()
+			table.remove(group.pets, index)
+
+			-- reslot the survivors so the ring closes up rather than leaving a
+			-- gap where the fallen one was standing
+			for slot, survivor in group.pets do
+				survivor.slot = slot
+			end
+			return true
+		end
+	end
+
+	return false
+end
+
+-- The average of the plot's enemy spawns, seen from the core. Resolved once per
+-- rebuild rather than per frame: a plot's doors do not move.
+local function guardFacingFor(player: Player, core: BasePart?): Vector3?
+	if not core then
+		return nil
+	end
+
+	local spawns = PlotService.getFolder(player, "EnemySpawns")
+	if not spawns then
+		return nil
+	end
+
+	local sum = Vector3.zero
+	local found = 0
+	for _, child in spawns:GetChildren() do
+		if child:IsA("BasePart") then
+			sum += child.Position
+			found += 1
+		end
+	end
+	if found == 0 then
+		return nil
+	end
+
+	local average = sum / found
+	local flat = Vector3.new(average.X - core.Position.X, 0, average.Z - core.Position.Z)
+	return if flat.Magnitude > 0.01 then flat.Unit else nil
+end
+
 -- Rebuild a player's pets from their equipped list. Cheap enough to call on
 -- every equip change, and it keeps world state and saved state in lockstep.
 local function refresh(player: Player)
@@ -574,19 +716,29 @@ local function refresh(player: Player)
 		return -- respawning; CharacterAdded will call us again
 	end
 
-	local names = PetInventoryService.getEquippedPetNames(player)
-	if #names == 0 then
+	local equipped = PetInventoryService.getEquippedPets(player)
+	if #equipped == 0 then
 		return
 	end
 
-	-- Equipping is deployment now: these pets guard the core whether or not the
-	-- owner is standing there, which is the whole point of a defence you can
-	-- walk away from.
-	local home = PlotService.getPart(player, "Core") or ownerRoot
+	local core = PlotService.getPart(player, "Core")
+	local out = downed[player] or {}
 
-	local group: PetGroup = { owner = player, pets = {}, target = nil, home = home }
-	for slot, petName in names do
-		local pet = buildPet(petName, slot, home)
+	local group: PetGroup = {
+		owner = player,
+		pets = {},
+		target = nil,
+		core = core,
+		guardFacing = guardFacingFor(player, core),
+	}
+	for _, entry in equipped do
+		-- a brainrot downed this wave stays out until it ends
+		if out[entry.id] then
+			continue
+		end
+
+		local slot = #group.pets + 1
+		local pet = buildPet(entry.name, entry.id, slot, anchorFor(group, ownerRoot))
 		if pet then
 			table.insert(group.pets, pet)
 		end
@@ -641,20 +793,26 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 	local count = #group.pets
 	local target = group.target
 
-	-- Ring around the target while attacking, ring around home while idle.
-	--
-	-- A ring rather than the row they used to hold behind the owner: a core
-	-- needs covering from every side, and a row only guards one approach.
+	-- Ring the target while attacking. Otherwise ring the core if defending, or
+	-- trail the owner if not: a core needs covering from every side, where a
+	-- follower reads better in a row behind the person it belongs to.
+	local anchor = anchorFor(group, ownerRoot)
+
 	local goal: Vector3
 	if target then
+		-- Engage from the side they are already on, rather than wrapping around
+		-- it: running past a zombie to hit its far side lets it walk on by.
+		local approach = anchor.Position - target.Position
+		local facing = Vector3.new(approach.X, 0, approach.Z)
+		facing = if facing.Magnitude > 0.01 then facing.Unit else nil
+
 		local standoff = target.Size.Magnitude / 2 + pet.stats.attackRange * 0.4
-		goal = target.Position + slotOffset(pet.slot, count, standoff)
-	elseif group.home == ownerRoot then
-		-- no plot: fall back to trailing the owner, as they always did
+		goal = target.Position + slotOffset(pet.slot, count, standoff, facing)
+	elseif anchor == ownerRoot then
 		goal = ownerRoot.Position + followOffset(ownerRoot, pet.slot, count, pet.stats.followDistance)
 	else
-		local guardRadius = group.home.Size.Magnitude / 2 + pet.stats.followDistance
-		goal = group.home.Position + slotOffset(pet.slot, count, guardRadius)
+		local guardRadius = anchor.Size.Magnitude / 2 + pet.stats.followDistance
+		goal = anchor.Position + slotOffset(pet.slot, count, guardRadius, group.guardFacing)
 	end
 
 	-- movement works off basePosition, not the rendered root: reading back a
@@ -765,10 +923,10 @@ local function updateGroup(group: PetGroup, deltaTime: number, now: number)
 
 	local range = group.pets[1] and group.pets[1].stats.searchRadius or 60
 
-	-- Measured from home, not from the owner. Searching around the player would
-	-- mean walking to the hatchery takes your defenders' attention with you,
-	-- which is exactly the failure this design exists to avoid.
-	local anchor = group.home.Position
+	-- Measured from wherever they are holding, not from the owner. During a
+	-- wave that is the core, so walking to the hatchery does not take your
+	-- defenders' attention with you - the failure this design exists to avoid.
+	local anchor = anchorFor(group, ownerRoot).Position
 
 	-- drop the target if it died, was removed, or drifted out of range of home
 	local target = group.target
@@ -841,6 +999,7 @@ function PetService.start()
 	petFolder.Parent = Workspace
 
 	targetChangedRemote = Remotes.get("PetTargetChanged")
+	damageTakenRemote = Remotes.get("DamageTaken")
 	-- wrapped rather than passed directly: a typed callback is not assignable
 	-- to the signal's `(...any) -> ()` under --!strict
 	Remotes.get("RequestAttack").OnServerEvent:Connect(function(player, part)
@@ -848,6 +1007,25 @@ function PetService.start()
 	end)
 
 	PetInventoryService.EquippedChanged:Connect(refresh)
+
+	-- Injected rather than required: EnemyService cannot require this module
+	-- back without making a cycle neither would load through.
+	EnemyService.setPetLocator({
+		findNearest = PetService.findNearestPet,
+		damage = PetService.damagePet,
+	})
+
+	-- the wave is over, so everything that went down gets back up
+	EnemyService.WaveEnded:Connect(function(player: Player)
+		if downed[player] then
+			downed[player] = nil
+			refresh(player)
+		end
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		downed[player] = nil
+	end)
 
 	local function bind(player: Player)
 		player.CharacterAdded:Connect(function()

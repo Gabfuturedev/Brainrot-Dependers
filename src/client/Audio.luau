@@ -24,7 +24,7 @@ local Audio = {}
 
 function Audio.start()
 	local lastHit = 0
-	Remotes.get("BreakableDamaged").OnClientEvent:Connect(function()
+	Remotes.get("DamageDealt").OnClientEvent:Connect(function()
 		local now = os.clock()
 		if now - lastHit < HIT_INTERVAL then
 			return

@@ -45,6 +45,7 @@ type Enemy = {
 	position: Vector3,
 	rootHeight: number, -- feet to root centre, so it stands on the ground
 	alive: boolean,
+	lastAttack: number, -- os.clock() of its last swing at a brainrot
 	contributions: { [Player]: number },
 }
 
@@ -56,12 +57,35 @@ type Wave = {
 	nextSpawn: number, -- os.clock() of the next entry
 }
 
+-- How EnemyService reaches brainrots without requiring PetService, which
+-- requires this one. PetService injects it at start; a plain require in both
+-- directions is a cycle and will not load.
+export type PetLocator = {
+	findNearest: (position: Vector3, radius: number, owner: Player) -> BasePart?,
+	damage: (part: BasePart, amount: number) -> boolean,
+}
+
+local petLocator: PetLocator? = nil
+
 local enemies: { [BasePart]: Enemy } = {}
 local waves: { [Player]: Wave } = {}
 local templates: { [string]: Model } = {}
 local enemyFolder: Folder
 local damagedRemote: RemoteEvent
 local warnedRigs: { [string]: boolean } = {} -- one complaint per model, not per spawn
+
+local waveEnded = Instance.new("BindableEvent")
+-- Fires (player) when their wave is cleared, which is when downed brainrots
+-- come back. PetService listens.
+EnemyService.WaveEnded = waveEnded.Event
+
+function EnemyService.setPetLocator(locator: PetLocator)
+	petLocator = locator
+end
+
+function EnemyService.isWaveActive(player: Player): boolean
+	return waves[player] ~= nil
+end
 
 local groundParams = RaycastParams.new()
 groundParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -165,6 +189,7 @@ local function despawn(entry: Enemy)
 	if wave.remaining <= 0 and wave.alive <= 0 then
 		waves[entry.owner] = nil
 		publishWave(entry.owner)
+		waveEnded:Fire(entry.owner) -- brings downed brainrots back
 	else
 		publishWave(entry.owner)
 	end
@@ -342,18 +367,40 @@ local function spawnFor(player: Player): string?
 		position = position,
 		rootHeight = rootHeight,
 		alive = true,
+		lastAttack = 0,
 		contributions = {},
 	}
 	return nil
 end
 
 local function step(deltaTime: number)
+	local now = os.clock()
+
 	for part, entry in enemies do
 		if not entry.alive or not part.Parent then
 			continue
 		end
 
 		local current = entry.position
+
+		-- Anything in the way gets fought first. This is what makes brainrots
+		-- blockers rather than turrets: an enemy only reaches the core when
+		-- nothing living stands between it and there.
+		local blocker = if petLocator
+			then petLocator.findNearest(current, entry.stats.attackRange, entry.owner)
+			else nil
+
+		if blocker then
+			part.CFrame = CFrame.lookAt(current, Vector3.new(blocker.Position.X, current.Y, blocker.Position.Z))
+
+			if now - entry.lastAttack >= entry.stats.attackCooldown then
+				entry.lastAttack = now
+				assert(petLocator, "petLocator")
+				petLocator.damage(blocker, entry.stats.damage)
+			end
+			continue -- stopped to fight; no walking this frame
+		end
+
 		local flat = Vector3.new(entry.goal.X - current.X, 0, entry.goal.Z - current.Z)
 		local distance = flat.Magnitude
 
@@ -382,7 +429,7 @@ function EnemyService.start()
 	enemyFolder.Name = "Enemies"
 	enemyFolder.Parent = Workspace
 
-	damagedRemote = Remotes.get("BreakableDamaged")
+	damagedRemote = Remotes.get("DamageDealt")
 
 	indexTemplates()
 

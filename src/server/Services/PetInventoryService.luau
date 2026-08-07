@@ -87,21 +87,24 @@ local function countOwned(data: any): number
 end
 
 -- Pet config names of everything currently equipped, in slot order.
-function PetInventoryService.getEquippedPetNames(player: Player): { string }
+-- Ids as well as names, in slot order. The id matters because a brainrot downed
+-- during a wave has to stay down until it ends, and "which one" cannot be
+-- answered by a name when three of them are the same pet.
+function PetInventoryService.getEquippedPets(player: Player): { { id: string, name: string } }
 	local data = DataService.getData(player)
 	if not data then
 		return {}
 	end
 
-	local names = {}
+	local equipped: { { id: string, name: string } } = {}
 	for _, petId in data.equipped do
 		local petName = data.ownedPets[petId]
 		-- skip ids that no longer resolve, e.g. a pet removed from the config
 		if petName and PetConfig.exists(petName) then
-			table.insert(names, petName)
+			table.insert(equipped, { id = petId, name = petName })
 		end
 	end
-	return names
+	return equipped
 end
 
 function PetInventoryService.getInventory(player: Player): { Entry }

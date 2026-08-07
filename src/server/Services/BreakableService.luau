@@ -222,7 +222,7 @@ function BreakableService.findNearest(position: Vector3, radius: number): BasePa
 end
 
 function BreakableService.start()
-	damagedRemote = Remotes.get("BreakableDamaged")
+	damagedRemote = Remotes.get("DamageDealt")
 
 	local areas = Workspace:WaitForChild("Areas", 10)
 	if not areas then

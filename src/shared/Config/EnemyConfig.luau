@@ -13,6 +13,12 @@ export type EnemyStats = {
 	moveSpeed: number, -- studs per second
 	coinReward: number, -- split between whoever damaged it
 	coreDamage: number, -- taken off the core if it arrives
+	-- Enemies walk at the core and stop to fight whatever is in the way. That
+	-- makes brainrots blockers rather than turrets: an enemy only reaches the
+	-- core if nothing living is standing between it and there.
+	damage: number, -- per hit, to a brainrot
+	attackRange: number, -- studs at which it stops walking and swings
+	attackCooldown: number, -- seconds between swings
 	-- Empty falls back to Roblox's default walk for the rig type, which any
 	-- place is allowed to play. Set this only for an animation you uploaded
 	-- yourself; one bundled with a toolbox model belongs to its uploader and
@@ -37,6 +43,12 @@ EnemyConfig.Enemies = {
 		moveSpeed = 6,
 		coinReward = 12,
 		coreDamage = 5,
+		-- 5 DPS against a 120 HP starter: one Shambler needs 24 seconds to down
+		-- it, three need eight. Losing a brainrot should be the cost of being
+		-- outnumbered, not of being looked at.
+		damage = 6,
+		attackRange = 7,
+		attackCooldown = 1.2,
 		walkAnimation = "",
 	} :: EnemyStats,
 }

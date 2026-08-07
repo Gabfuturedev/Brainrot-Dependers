@@ -68,8 +68,15 @@ local function popup(position: Vector3, text: string, color: Color3, size: numbe
 end
 
 function FloatingText.start()
-	Remotes.get("BreakableDamaged").OnClientEvent:Connect(function(part, damage)
+	Remotes.get("DamageDealt").OnClientEvent:Connect(function(part, damage)
 		popup(part.Position, `-{damage}`, Theme.Color.Text, Theme.TextSize.lg)
+	end)
+
+	-- Red, and only red in the whole game: damage to your own side is the one
+	-- thing here that is bad news, so it should never be mistaken at a glance
+	-- for the white numbers your brainrots are putting out.
+	Remotes.get("DamageTaken").OnClientEvent:Connect(function(part, damage)
+		popup(part.Position, `-{damage}`, Theme.Color.Danger, Theme.TextSize.lg)
 	end)
 
 	-- coins now read out where the drop was picked up, not where it spawned

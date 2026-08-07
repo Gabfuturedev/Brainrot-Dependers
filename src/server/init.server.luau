@@ -5,6 +5,9 @@
 
 local Services = script.Services
 
+-- PlotService goes early: anything that spawns into a plot needs it seated
+-- before players arrive.
+require(Services.PlotService).start()
 require(Services.CurrencyService).start()
 require(Services.VfxService).start()
 require(Services.DropService).start()

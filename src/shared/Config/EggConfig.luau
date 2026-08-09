@@ -5,6 +5,8 @@
 -- BasicEgg costs ~2 minutes of Area1 play. Expected damage per hatch is about
 -- 15, so ~3x your starting pet: a visible jump without trivialising Area1.
 
+local PetConfig = require(script.Parent.PetConfig)
+
 export type Egg = {
 	displayName: string,
 	cost: number,
@@ -62,17 +64,30 @@ function EggConfig.chances(egg: Egg): { { name: string, chance: number } }
 end
 
 -- Weighted random pick. Returns nil only if the table is empty.
-function EggConfig.roll(egg: Egg): string?
+--
+-- `luck` biases the roll toward rarer pets by raising each weight to a power of
+-- its rarity rank: a Common is rank 1 and untouched, a Legendary is rank 5 and
+-- gets luck^4. Scaling by rank rather than flatly is what makes luck feel like
+-- luck - it moves the tail without quietly making Commons rare too.
+function EggConfig.roll(egg: Egg, luck: number?): string?
+	local bias = luck or 1
+
+	local weighted: { [string]: number } = {}
 	local total = 0
-	for _, weight in egg.weights do
-		total += weight
+	for petName, weight in egg.weights do
+		local stats = PetConfig.get(petName)
+		local rank = if stats then PetConfig.rarityRank(stats.rarity) else 1
+		local adjusted = weight * bias ^ (rank - 1)
+		weighted[petName] = adjusted
+		total += adjusted
 	end
+
 	if total <= 0 then
 		return nil
 	end
 
 	local pick = math.random() * total
-	for petName, weight in egg.weights do
+	for petName, weight in weighted do
 		pick -= weight
 		if pick <= 0 then
 			return petName

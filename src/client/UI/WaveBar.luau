@@ -1,14 +1,13 @@
 --!strict
--- Start button for the next wave, and the count while one is running.
+-- Wave state and the button that starts a run.
 --
--- The wave is something the player starts, not something that happens to them.
--- Enemies arriving on a timer means never being ready and never choosing to
--- watch; a button makes the fight a thing you set off and then decide whether
--- to stand and see, or walk to the hatchery and trust your defence.
---
--- Reads wave state off the plot's attributes rather than a remote. The server
+-- Reads everything off the plot's attributes rather than a remote: the server
 -- writes them, they replicate on their own, and this only has to find the plot
 -- whose OwnerUserId is ours.
+--
+-- Right edge, vertically centred. The wave number is the largest thing on the
+-- screen after the reveal, because during a run it is the only number that
+-- matters - coins are a means and the wave is the score.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,9 +21,10 @@ local Theme = require(script.Parent.Theme)
 local UIKit = require(script.Parent.UIKit)
 
 local PLOT_FOLDER = "Plots"
-local BAR_SIZE = UDim2.fromOffset(206, 92)
-local SHOWN_POSITION = UDim2.new(1, -22, 1, -22)
-local HIDDEN_POSITION = UDim2.new(1, -22, 1, 160)
+local PANEL_SIZE = UDim2.fromOffset(232, 196)
+local SHOWN_POSITION = UDim2.new(1, -20, 0.5, 0)
+local HIDDEN_POSITION = UDim2.new(1, 260, 0.5, 0) -- off the right edge
+local TRACK_HEIGHT = 22
 
 local player = Players.LocalPlayer
 
@@ -55,34 +55,82 @@ function WaveBar.start()
 	gui.DisplayOrder = 4
 	gui.Parent = playerGui
 
-	local bar = UIKit.surface({
+	local panel = UIKit.surface({
 		color = Theme.Color.Surface,
 		radius = Theme.Radius.lg,
 		stroke = Theme.Stroke.heavy,
 		shadow = 5,
 	})
-	bar.AnchorPoint = Vector2.new(1, 1)
-	bar.Position = HIDDEN_POSITION
-	bar.Size = BAR_SIZE
-	bar.Parent = gui
+	panel.AnchorPoint = Vector2.new(1, 0.5)
+	panel.Position = HIDDEN_POSITION
+	panel.Size = PANEL_SIZE
+	panel.Parent = gui
 
-	local title = UIKit.label({
+	-- How much of the wave is left, as a bar. A count alone makes you do the
+	-- arithmetic; a bar draining tells you at a glance whether to hold or run
+	-- for the hatchery.
+	local track = UIKit.surface({
+		color = Theme.Color.SurfaceSunken,
+		radius = Theme.Radius.pill,
+		stroke = Theme.Stroke.thin,
+		gradient = Theme.Gradient.subtle,
+	})
+	track.AnchorPoint = Vector2.new(0.5, 0)
+	track.Position = UDim2.new(0.5, 0, 0, 14)
+	track.Size = UDim2.new(1, -Theme.Space.xl, 0, TRACK_HEIGHT)
+	track.ClipsDescendants = true -- lets the fill keep pill ends while cut short
+	track.ZIndex = 3
+	track.Parent = panel
+
+	local fill = Instance.new("Frame")
+	fill.BackgroundColor3 = Theme.Color.Danger
+	fill.BorderSizePixel = 0
+	fill.Size = UDim2.fromScale(1, 1)
+	fill.ZIndex = 4
+	fill.Parent = track
+	UIKit.corner(fill, Theme.Radius.pill)
+	UIKit.gradient(fill, Theme.Gradient.normal)
+
+	local remainingLabel = UIKit.label({
+		text = "",
+		color = Theme.Color.Text,
+		size = Theme.TextSize.xs,
+		font = Theme.Font.Heavy,
+		outline = Theme.Stroke.thin,
+	})
+	remainingLabel.Size = UDim2.fromScale(1, 1)
+	remainingLabel.ZIndex = 5
+	remainingLabel.Parent = track
+
+	local waveLabel = UIKit.label({
 		text = "DEFENCE",
-		color = Theme.Color.TextMuted,
+		color = Theme.Color.Text,
+		size = Theme.TextSize.lg,
+		font = Theme.Font.Heavy,
+		outline = Theme.Stroke.heavy,
+	})
+	waveLabel.Position = UDim2.fromOffset(0, 44)
+	waveLabel.Size = UDim2.new(1, 0, 0, 40)
+	waveLabel.ZIndex = 3
+	waveLabel.Parent = panel
+
+	local bestLabel = UIKit.label({
+		text = "",
+		color = Theme.Color.TextFaint,
 		size = Theme.TextSize.xs,
 		outline = Theme.Stroke.thin,
 	})
-	title.Position = UDim2.fromOffset(0, 10)
-	title.Size = UDim2.new(1, 0, 0, 18)
-	title.ZIndex = 3
-	title.Parent = bar
+	bestLabel.Position = UDim2.fromOffset(0, 84)
+	bestLabel.Size = UDim2.new(1, 0, 0, 18)
+	bestLabel.ZIndex = 3
+	bestLabel.Parent = panel
 
-	local start = UIKit.button({ text = "START WAVE", color = Theme.Color.Danger, textSize = Theme.TextSize.sm })
+	local start = UIKit.button({ text = "START", color = Theme.Color.Danger, textSize = Theme.TextSize.md })
 	start.AnchorPoint = Vector2.new(0.5, 1)
 	start.Position = UDim2.new(0.5, 0, 1, -Theme.Space.md)
-	start.Size = UDim2.new(1, -Theme.Space.xl, 0, 44)
+	start.Size = UDim2.new(1, -Theme.Space.xl, 0, 50)
 	start.ZIndex = 3
-	start.Parent = bar
+	start.Parent = panel
 
 	start.Activated:Connect(function()
 		Remotes.get("RequestStartWave"):FireServer()
@@ -94,27 +142,45 @@ function WaveBar.start()
 			return
 		end
 		shown = visible
-		TweenService:Create(bar, Theme.Motion.Enter, {
+		TweenService:Create(panel, Theme.Motion.Enter, {
 			Position = if visible then SHOWN_POSITION else HIDDEN_POSITION,
 		}):Play()
 	end
 
 	local function refresh(plot: Instance)
 		local active = plot:GetAttribute("WaveActive") == true
+		local wave = plot:GetAttribute("WaveNumber")
 		local remaining = plot:GetAttribute("WaveRemaining")
 		local size = plot:GetAttribute("WaveSize")
+		local best = plot:GetAttribute("BestWave")
 
-		if active and typeof(remaining) == "number" and typeof(size) == "number" then
-			title.Text = `{remaining} LEFT OF {size}`
-			title.TextColor3 = Theme.Color.Warning
+		if active and typeof(wave) == "number" and typeof(remaining) == "number" and typeof(size) == "number" then
+			waveLabel.Text = `WAVE {wave}`
+			waveLabel.TextColor3 = Theme.Color.Warning
+
+			track.Visible = true
+			local fraction = if size > 0 then math.clamp(remaining / size, 0, 1) else 0
+			TweenService:Create(fill, Theme.Motion.Normal, { Size = UDim2.fromScale(fraction, 1) }):Play()
+
+			-- During the pause between waves nothing is left to count, and
+			-- "0 LEFT" reads as broken rather than as a breather.
+			remainingLabel.Text = if remaining > 0 then `{remaining} LEFT` else "INCOMING"
+
+			bestLabel.Text = if typeof(best) == "number" and best > 0 then `BEST  {best}` else ""
 			start.Text = "IN PROGRESS"
 			start.BackgroundTransparency = Theme.Transparency.Disabled
 			start.TextTransparency = 0.4
 			start.Active = false
 		else
-			title.Text = "DEFENCE"
-			title.TextColor3 = Theme.Color.TextMuted
-			start.Text = "START WAVE"
+			waveLabel.Text = "DEFENCE"
+			waveLabel.TextColor3 = Theme.Color.Text
+
+			track.Visible = false
+			bestLabel.Text = if typeof(best) == "number" and best > 0
+				then `BEST  WAVE {best}`
+				else "NO RECORD YET"
+
+			start.Text = "START"
 			start.BackgroundTransparency = 0
 			start.TextTransparency = 0
 			start.Active = true
@@ -133,7 +199,7 @@ function WaveBar.start()
 		end
 		assert(plot, "plot")
 
-		for _, attribute in { "WaveActive", "WaveRemaining", "WaveSize" } do
+		for _, attribute in { "WaveActive", "WaveNumber", "WaveRemaining", "WaveSize", "BestWave" } do
 			plot:GetAttributeChangedSignal(attribute):Connect(function()
 				refresh(plot :: Instance)
 			end)

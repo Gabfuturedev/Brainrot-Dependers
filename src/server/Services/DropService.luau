@@ -19,6 +19,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared.Remotes)
 
 local CurrencyService = require(script.Parent.CurrencyService)
+local SkillService = require(script.Parent.SkillService)
 
 -- Drops pop out, settle, then fly to the owner once they are near enough. The
 -- magnet radius is what the player experiences as "pickup range"; the collect
@@ -197,8 +198,9 @@ local function update(now: number, deltaTime: number)
 		local root = ownerRoot(drop)
 		local pull = if root then root.Position + Vector3.new(0, MAGNET_HEIGHT, 0) else nil
 		local distance = if pull then (pull - drop.position).Magnitude else math.huge
+		local reach = MAGNET_RADIUS + SkillService.value(drop.owner, "Magnetism")
 
-		if pull and distance <= MAGNET_RADIUS then
+		if pull and distance <= reach then
 			if distance <= COLLECT_RADIUS then
 				collect(drop)
 				continue

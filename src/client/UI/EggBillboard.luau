@@ -44,8 +44,14 @@ local player = Players.LocalPlayer
 local EggBillboard = {}
 
 -- Which pets this player has ever hatched, and the tiles waiting to be told.
+-- Keyed by egg so a rebuilt billboard replaces its old closures rather than
+-- leaving them behind pointing at destroyed instances.
 local discovered: { [string]: boolean } = {}
-local refreshers: { () -> () } = {}
+local refreshers: { [string]: { () -> () } } = {}
+
+-- One billboard per egg, so a second build request is ignored rather than
+-- stacking a duplicate on top of the first.
+local built: { [string]: BillboardGui } = {}
 
 local hostPartOf = EggFx.hostPartOf
 
@@ -120,9 +126,7 @@ local function build(model: Instance, eggName: string, playerGui: PlayerGui)
 	if not egg then
 		return -- an egg in Workspace with no config; the server already warns
 	end
-
-	local host = hostPartOf(model)
-	if not host then
+	if built[eggName] then
 		return
 	end
 
@@ -133,7 +137,6 @@ local function build(model: Instance, eggName: string, playerGui: PlayerGui)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = `EggBillboard_{eggName}`
-	billboard.Adornee = host
 	billboard.Size = UDim2.fromOffset(width, height)
 	billboard.StudsOffsetWorldSpace = Vector3.new(0, HEIGHT_ABOVE, 0)
 	billboard.MaxDistance = VIEW_DISTANCE -- the "only when close" rule, for free
@@ -196,24 +199,54 @@ local function build(model: Instance, eggName: string, playerGui: PlayerGui)
 	stripLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	stripLayout.Parent = strip
 
+	local eggRefreshers: { () -> () } = {}
 	for order, entry in rows do
 		local tile, refresh = buildTile(entry.name, entry.chance, order)
 		if tile then
 			tile.Parent = strip
-			table.insert(refreshers, refresh)
+			table.insert(eggRefreshers, refresh)
 		end
 	end
+	refreshers[eggName] = eggRefreshers
+
+	-- Resolved lazily and re-resolved on demand, rather than demanded up front.
+	--
+	-- A Model replicates to the client before its children do, so asking for a
+	-- BasePart the instant the model appears legitimately returns nil - and the
+	-- old code read that as "no egg here" and gave up permanently. Streaming
+	-- does the same thing later: parts stream out, the adornee dies, and no
+	-- ChildAdded on the Eggs folder ever fires for a part reappearing INSIDE a
+	-- model that never left.
+	--
+	-- A BillboardGui with a nil Adornee simply does not render, so an
+	-- unresolved one is invisible rather than broken.
+	local function attach()
+		local current = billboard.Adornee
+		if current and current.Parent then
+			return
+		end
+		billboard.Adornee = hostPartOf(model)
+	end
+
+	attach()
+	model.DescendantAdded:Connect(attach)
 
 	-- PlayerGui with Adornee, rather than parented to the part. A BillboardGui
 	-- in Workspace renders perfectly well but never receives input - and while
 	-- nothing here is clickable any more, keeping it here means adding
 	-- something clickable later does not silently fail.
 	billboard.Parent = playerGui
+	built[eggName] = billboard
 
-	-- and since it no longer lives with the egg, it has to be cleaned up by hand
-	host.Destroying:Once(function()
-		billboard:Destroy()
-	end)
+	if not billboard.Adornee then
+		-- Not a failure yet: DescendantAdded picks it up the moment the parts
+		-- arrive. Worth saying if they never do, since the symptom is silence.
+		task.delay(10, function()
+			if billboard.Parent and not billboard.Adornee then
+				warn(`[EggBillboard] '{eggName}' has no BasePart to attach to - the drop table cannot be placed`)
+			end
+		end)
+	end
 end
 
 function EggBillboard.start()
@@ -224,8 +257,10 @@ function EggBillboard.start()
 			return
 		end
 		discovered = newDiscovered
-		for _, refresh in refreshers do
-			refresh()
+		for _, eggRefreshers in refreshers do
+			for _, refresh in eggRefreshers do
+				refresh()
+			end
 		end
 	end)
 
@@ -240,6 +275,17 @@ function EggBillboard.start()
 	end
 	eggs.ChildAdded:Connect(function(model)
 		build(model, model.Name, playerGui)
+	end)
+
+	-- An egg leaving takes its billboard with it, and lets a later one rebuild.
+	-- Streaming removes and restores whole models this way.
+	eggs.ChildRemoved:Connect(function(model)
+		local billboard = built[model.Name]
+		if billboard then
+			billboard:Destroy()
+			built[model.Name] = nil
+			refreshers[model.Name] = nil
+		end
 	end)
 end
 

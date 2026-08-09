@@ -27,10 +27,14 @@ being commanded.
 
 ## Decisions already made
 
-**The base has health, not the brainrots.** The economy is *collect brainrots*;
-pets that die fight that directly, and cost healing, revives, death states and
-respawn timers. Enemies that reach the core damage it and stop production until
-repaired. Real stakes, nothing destroyed.
+**The core's health is the run's life total.** Brainrots can be downed, but
+never destroyed — they get back up between waves, because the economy is
+*collect brainrots* and permanently losing one fights that directly.
+
+Every enemy that walks past your line takes a permanent bite out of the core,
+and at zero the run ends. So losing your defenders is the *cause* of losing
+rather than the definition of it: you watch what it costs instead of being told
+you failed.
 
 **Auto-engage, not tower defence.** No rounds, no placement puzzle. Each
 brainrot holds a post and fights what comes near it. If defending required your
@@ -84,12 +88,9 @@ attributes off any part and does not know what a breakable is.
 
 ## Build order
 
-1. **Plot assignment** — one player, one plot, spawn there
-2. **One enemy** walking to one core, killed by existing pet combat
-3. Base health and repair
-4. Placement — only if ringing the core turns out to be too passive
-5. Waves and scaling
-6. Base upgrades
-
-Stop after 2 and judge it. If defending one enemy with one brainrot does not
-feel good, nothing after it will fix that.
+1. ~~Plot assignment~~ — done
+2. ~~One enemy walking to a core, killed by the existing pet combat~~ — done
+3. ~~Core health, endless waves, highest-wave score~~ — done
+4. Base upgrades — box → chest → vault, raising core health and defence slots
+5. Placement — only if ringing the core turns out to be too passive
+6. More enemy types — a fast one and a tanky one change what a line needs

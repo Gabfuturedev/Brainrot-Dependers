@@ -21,13 +21,16 @@ local ServerStorage = game:GetService("ServerStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local CoreConfig = require(Shared.Config.CoreConfig)
 local EnemyConfig = require(Shared.Config.EnemyConfig)
 local Remotes = require(Shared.Remotes)
 local Rig = require(Shared.Rig)
 local Sound = require(Shared.Sound)
 
+local DataService = require(script.Parent.DataService)
 local DropService = require(script.Parent.DropService)
 local PlotService = require(script.Parent.PlotService)
+local SkillService = require(script.Parent.SkillService)
 
 local FOLDER_NAME = "Enemies" -- under ServerStorage
 local ARRIVE_DISTANCE = 4 -- studs from the core before it counts as arrived
@@ -51,10 +54,14 @@ type Enemy = {
 
 local EnemyService = {}
 
-type Wave = {
-	remaining: number, -- still to enter
+type Run = {
+	wave: number, -- which wave is being fought, 1-based
+	remaining: number, -- still to enter this wave
 	alive: number, -- on the field
 	nextSpawn: number, -- os.clock() of the next entry
+	-- os.clock() the next wave starts, or 0 while one is spawning. The pause
+	-- between waves is what makes an endless run readable rather than a stream.
+	nextWave: number,
 }
 
 -- How EnemyService reaches brainrots without requiring PetService, which
@@ -68,23 +75,32 @@ export type PetLocator = {
 local petLocator: PetLocator? = nil
 
 local enemies: { [BasePart]: Enemy } = {}
-local waves: { [Player]: Wave } = {}
+local runs: { [Player]: Run } = {}
 local templates: { [string]: Model } = {}
 local enemyFolder: Folder
 local damagedRemote: RemoteEvent
 local warnedRigs: { [string]: boolean } = {} -- one complaint per model, not per spawn
 
-local waveEnded = Instance.new("BindableEvent")
--- Fires (player) when their wave is cleared, which is when downed brainrots
--- come back. PetService listens.
-EnemyService.WaveEnded = waveEnded.Event
+local runEnded = Instance.new("BindableEvent")
+-- Fires (player) when a run is over: the core fell, or they left.
+EnemyService.RunEnded = runEnded.Event
+
+local waveCleared = Instance.new("BindableEvent")
+-- Fires (player) when a wave is cleared and the intermission begins.
+--
+-- Brainrots recover here rather than at the end of the run. A run now lasts
+-- until the core falls, which can be twenty waves - losing a defender on wave
+-- three and fighting the other seventeen without it would end every run the
+-- moment it started going badly. The cost of losing one is the damage that gets
+-- past you for the rest of that wave, and that is written on the core.
+EnemyService.WaveCleared = waveCleared.Event
 
 function EnemyService.setPetLocator(locator: PetLocator)
 	petLocator = locator
 end
 
 function EnemyService.isWaveActive(player: Player): boolean
-	return waves[player] ~= nil
+	return runs[player] ~= nil
 end
 
 local groundParams = RaycastParams.new()
@@ -157,6 +173,13 @@ local function buildEnemy(stats: EnemyConfig.EnemyStats): (Model, BasePart)
 	return model, root
 end
 
+-- Horde buys extra enemies on top of the wave's own count. Deliberately the
+-- one upgrade a player can regret: more enemies is more coins and a harder
+-- wave, and the core pays for the difference.
+local function waveSizeFor(player: Player, wave: number): number
+	return EnemyConfig.waveSize(wave) + math.floor(SkillService.value(player, "Horde"))
+end
+
 -- Wave state rides on the plot as attributes rather than a remote: it
 -- replicates on its own, and the owner's UI can just read its own plot. Same
 -- pattern as plot ownership and breakable health.
@@ -166,10 +189,14 @@ local function publishWave(player: Player)
 		return
 	end
 
-	local wave = waves[player]
-	plot:SetAttribute("WaveActive", wave ~= nil)
-	plot:SetAttribute("WaveRemaining", if wave then wave.remaining + wave.alive else 0)
-	plot:SetAttribute("WaveSize", if wave then EnemyConfig.Wave.size else 0)
+	local run = runs[player]
+	local data = DataService.getData(player)
+
+	plot:SetAttribute("WaveActive", run ~= nil)
+	plot:SetAttribute("WaveNumber", if run then run.wave else 0)
+	plot:SetAttribute("WaveRemaining", if run then run.remaining + run.alive else 0)
+	plot:SetAttribute("WaveSize", if run then waveSizeFor(player, run.wave) else 0)
+	plot:SetAttribute("BestWave", if data then data.highestWave else 0)
 end
 
 local function despawn(entry: Enemy)
@@ -180,19 +207,52 @@ local function despawn(entry: Enemy)
 	enemies[entry.root] = nil
 	entry.model:Destroy()
 
-	local wave = waves[entry.owner]
-	if not wave then
+	local run = runs[entry.owner]
+	if not run then
 		return
 	end
 
-	wave.alive -= 1
-	if wave.remaining <= 0 and wave.alive <= 0 then
-		waves[entry.owner] = nil
-		publishWave(entry.owner)
-		waveEnded:Fire(entry.owner) -- brings downed brainrots back
-	else
-		publishWave(entry.owner)
+	run.alive -= 1
+
+	-- Wave cleared. The run does not end here - it never ends on success, only
+	-- on failure - so this books the intermission and puts the line back up.
+	if run.remaining <= 0 and run.alive <= 0 and run.nextWave == 0 then
+		run.nextWave = os.clock() + EnemyConfig.Wave.intermission
+		waveCleared:Fire(entry.owner)
 	end
+
+	publishWave(entry.owner)
+end
+
+-- Ends a run, banks the score, and clears the field.
+--
+-- Called when a player's last brainrot goes down, and when they leave. The
+-- score is only written if it beats their best, so a short run can never cost
+-- them the record from a long one.
+function EnemyService.endRun(player: Player)
+	local run = runs[player]
+	if not run then
+		return
+	end
+
+	-- The wave they were fighting does not count as survived; the last one they
+	-- finished does. Falling on wave 7 is a score of 6.
+	local reached = math.max(run.wave - 1, 0)
+	local data = DataService.getData(player)
+	if data and reached > data.highestWave then
+		data.highestWave = reached
+	end
+
+	runs[player] = nil
+
+	for _, entry in enemies do
+		if entry.owner == player then
+			despawn(entry)
+		end
+	end
+
+	publishWave(player)
+	runEnded:Fire(player)
 end
 
 -- Splits the reward across everyone who damaged it, in proportion. The last hit
@@ -209,7 +269,9 @@ local function payContributors(entry: Enemy)
 
 	for player, dealt in entry.contributions do
 		if player.Parent == Players then
-			local share = math.max(1, math.floor(entry.stats.coinReward * (dealt / total) + 0.5))
+			local reward = entry.stats.coinReward * SkillService.value(player, "Fortune")
+			-- at least 1, so a tiny contribution is never rounded to nothing
+			local share = math.max(1, math.floor(reward * (dealt / total) + 0.5))
 			DropService.spawnReward(player, entry.root.Position, share)
 		end
 	end
@@ -285,7 +347,7 @@ end
 -- than a bare false because "the folder is missing" and "the folder is empty"
 -- are different jobs for whoever is building the plot, and a warning that
 -- guesses wrong sends them to the wrong place.
-local function spawnFor(player: Player): string?
+local function spawnFor(player: Player, wave: number): string?
 	local core = PlotService.getPart(player, "Core")
 	if not core then
 		return "no Core part"
@@ -351,9 +413,14 @@ local function spawnFor(player: Player): string?
 	local position = Vector3.new(start.X, groundHeight(start, start.Y) + rootHeight, start.Z)
 	root.CFrame = CFrame.new(position)
 
+	-- Health is the only thing that scales with the wave. Making them faster or
+	-- hit harder changes what a defence has to look like; making them tougher
+	-- just means it has to be bigger, which is what the coins are for.
+	local health = math.floor(stats.health * EnemyConfig.waveHealthScale(wave))
+
 	-- set before parenting, so HealthBars sees a complete part when it arrives
-	root:SetAttribute("MaxHealth", stats.health)
-	root:SetAttribute("Health", stats.health)
+	root:SetAttribute("MaxHealth", health)
+	root:SetAttribute("Health", health)
 	root:SetAttribute("OwnerUserId", player.UserId)
 
 	model.Parent = enemyFolder
@@ -373,8 +440,25 @@ local function spawnFor(player: Player): string?
 	return nil
 end
 
+-- Takes a bite out of the core. Returns true if that finished it, rather than
+-- ending the run here: this is called from inside the enemy loop, and ending a
+-- run despawns every enemy on the plot - removing keys other than the current
+-- one mid-iteration is exactly the undefined behaviour to avoid.
+local function damageCore(player: Player, amount: number): boolean
+	local core = PlotService.getPart(player, "Core")
+	if not core then
+		return false
+	end
+
+	local current = core:GetAttribute("Health")
+	local health = math.max((if typeof(current) == "number" then current else CoreConfig.Health) - amount, 0)
+	core:SetAttribute("Health", health)
+	return health <= 0
+end
+
 local function step(deltaTime: number)
 	local now = os.clock()
+	local fallen: { Player } = {}
 
 	for part, entry in enemies do
 		if not entry.alive or not part.Parent then
@@ -405,9 +489,9 @@ local function step(deltaTime: number)
 		local distance = flat.Magnitude
 
 		if distance <= ARRIVE_DISTANCE then
-			-- Step 3 gives the core health to take off here. For now it simply
-			-- arrives and is gone, which is enough to see whether the defence
-			-- was fast enough.
+			if damageCore(entry.owner, entry.stats.coreDamage) then
+				table.insert(fallen, entry.owner)
+			end
 			despawn(entry)
 			continue
 		end
@@ -422,6 +506,11 @@ local function step(deltaTime: number)
 		entry.position = Vector3.new(nextFlat.X, smoothedY, nextFlat.Z)
 		part.CFrame = CFrame.lookAt(entry.position, Vector3.new(entry.goal.X, entry.position.Y, entry.goal.Z))
 	end
+
+	-- outside the loop, where clearing the field is safe
+	for _, player in fallen do
+		EnemyService.endRun(player)
+	end
 end
 
 function EnemyService.start()
@@ -433,48 +522,70 @@ function EnemyService.start()
 
 	indexTemplates()
 
-	-- waves are per plot, so they stop with their owner
+	-- runs are per plot, so they stop with their owner
 	PlotService.PlotReleased:Connect(function(player)
-		waves[player] = nil
-		for _, entry in enemies do
-			if entry.owner == player then
-				despawn(entry)
-			end
-		end
+		EnemyService.endRun(player)
 	end)
 
 	PlotService.PlotAssigned:Connect(publishWave) -- seed the idle state
+	DataService.ProfileLoaded:Connect(publishWave) -- and their best, once loaded
 
 	Remotes.get("RequestStartWave").OnServerEvent:Connect(function(player)
-		-- one wave at a time; a second press mid-fight is ignored rather than
+		-- one run at a time; a second press mid-fight is ignored rather than
 		-- stacking, which the client also blocks but cannot be trusted to
-		if waves[player] or not PlotService.getPlot(player) then
+		if runs[player] or not PlotService.getPlot(player) then
 			return
 		end
 
-		waves[player] = { remaining = EnemyConfig.Wave.size, alive = 0, nextSpawn = 0 }
+		-- Full core at the start of every run. HealthBars picks these up from
+		-- Workspace.Plots, so the core gets a bar the first time it is hit
+		-- without anything being told about it.
+		local core = PlotService.getPart(player, "Core")
+		if core then
+			core:SetAttribute("MaxHealth", CoreConfig.Health)
+			core:SetAttribute("Health", CoreConfig.Health)
+		end
+
+		runs[player] = {
+			wave = 1,
+			remaining = waveSizeFor(player, 1),
+			alive = 0,
+			nextSpawn = 0,
+			nextWave = 0,
+		}
 		publishWave(player)
 	end)
 
 	RunService.Heartbeat:Connect(function(deltaTime)
 		local now = os.clock()
 
-		for player, wave in waves do
-			if wave.remaining <= 0 or now < wave.nextSpawn then
+		for player, run in runs do
+			-- intermission over: the next wave, one heavier than the last
+			if run.nextWave > 0 then
+				if now >= run.nextWave then
+					run.wave += 1
+					run.remaining = waveSizeFor(player, run.wave)
+					run.nextWave = 0
+					run.nextSpawn = 0
+					publishWave(player)
+				end
 				continue
 			end
 
-			local problem = spawnFor(player)
+			if run.remaining <= 0 or now < run.nextSpawn then
+				continue
+			end
+
+			local problem = spawnFor(player, run.wave)
 			if problem then
 				-- the plot cannot host enemies; abandon rather than retry every
 				-- frame forever, and say exactly what to go and build
-				waves[player] = nil
-				publishWave(player)
-				warn(`[EnemyService] wave cancelled for {player.Name}: {problem}`)
+				EnemyService.endRun(player)
+				warn(`[EnemyService] run cancelled for {player.Name}: {problem}`)
 			else
-				wave.remaining -= 1
-				wave.alive += 1
-				wave.nextSpawn = now + EnemyConfig.Wave.spawnInterval
+				run.remaining -= 1
+				run.alive += 1
+				run.nextSpawn = now + EnemyConfig.Wave.spawnInterval
 				publishWave(player)
 			end
 		end

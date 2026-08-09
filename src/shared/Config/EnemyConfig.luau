@@ -55,13 +55,29 @@ EnemyConfig.Enemies = {
 
 EnemyConfig.Default = "Shambler"
 
--- A wave is what a player starts, not something that happens to them. Enemies
--- arriving on a timer whether you are ready or not means never being ready;
--- pressing a button means the fight is something you chose to watch.
+-- A run is what a player starts, not something that happens to them: pressing
+-- the button means the fight is something you chose. After that it does not
+-- stop. Waves keep coming, each a little heavier, until every brainrot you
+-- deployed is down - and how far you got is the score.
+--
+-- Endless with a fail state, rather than endless with none. A wave counter that
+-- can only go up is a clock; one that can be lost is a run.
 EnemyConfig.Wave = {
-	size = 6, -- enemies in a wave
+	baseSize = 4, -- enemies in wave 1
+	sizeGrowth = 1, -- extra enemies per wave after that
+	healthGrowth = 0.15, -- +15% enemy health per wave, compounding on wave 1
 	spawnInterval = 1.6, -- seconds between each one entering
+	intermission = 5, -- breathing room between a wave clearing and the next
 }
+
+-- Enemies in wave `n`, and what their health is multiplied by.
+function EnemyConfig.waveSize(wave: number): number
+	return EnemyConfig.Wave.baseSize + math.floor((wave - 1) * EnemyConfig.Wave.sizeGrowth)
+end
+
+function EnemyConfig.waveHealthScale(wave: number): number
+	return 1 + (wave - 1) * EnemyConfig.Wave.healthGrowth
+end
 
 function EnemyConfig.get(enemyName: string): EnemyStats?
 	return EnemyConfig.Enemies[enemyName]

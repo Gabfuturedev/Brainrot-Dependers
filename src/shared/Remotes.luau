@@ -22,6 +22,8 @@ local REMOTE_NAMES = {
 	"RequestEquipBest", -- client -> server: () swap the equipped set to the strongest owned
 	"RequestHatch", -- client -> server: (eggName, count) hatch from an egg you are standing at
 	"RequestStartWave", -- client -> server: () send the next wave at your own core
+	"RequestUpgrade", -- client -> server: (upgradeId) buy from a sign you are stood at
+	"SkillsUpdated", -- server -> client: (skills) skillId -> level
 	"AreasUpdated", -- server -> client: (unlockedAreas) so barriers can open
 	"ChooseStarter", -- server -> client: (petNames) offer the one-time starter pick
 	"RequestStarter", -- client -> server: (petName) the starter they picked

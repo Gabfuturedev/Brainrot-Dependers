@@ -32,7 +32,10 @@ function CoinDisplay.start()
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "CoinDisplay"
 	gui.ResetOnSpawn = false -- survive respawns
-	gui.IgnoreGuiInset = true
+	-- Respect the inset. Ignoring it lets a GUI draw into the strip Roblox owns
+	-- at the top of the screen, which is where its own logo, menu, chat, mic and
+	-- settings buttons live - and they are drawn over anything we put there.
+	gui.IgnoreGuiInset = false
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	-- Sunken body with a gold coin disc sitting proud of it, rather than a flat
@@ -44,9 +47,15 @@ function CoinDisplay.start()
 		stroke = Theme.Stroke.heavy,
 		shadow = 4,
 	})
+	-- Left edge, a third of the way down.
+	--
+	-- Not top-centre: that is where Roblox draws player nameplates and where any
+	-- banner wants to sit. Not the top-left corner either, which belongs to
+	-- Roblox's own topbar buttons - respecting the inset clears their height,
+	-- but they are wide as well as tall, so this drops clear of them entirely.
 	container.Name = "Container"
-	container.AnchorPoint = Vector2.new(0.5, 0)
-	container.Position = UDim2.new(0.5, 0, 0, 16)
+	container.AnchorPoint = Vector2.new(0, 0.5)
+	container.Position = UDim2.new(0, 16, 0.3, 0)
 	container.Size = REST_SIZE
 	container.Parent = gui
 

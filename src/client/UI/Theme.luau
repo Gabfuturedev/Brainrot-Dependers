@@ -79,6 +79,20 @@ Theme.Space = {
 	xxl = 38,
 }
 
+-- Uploaded sprites, blank until they exist.
+--
+-- Everything that reads these falls back to a drawn shape, so the UI works
+-- without any of them and gets better the moment one lands - same rule as the
+-- sound ids. Upload them WHITE or greyscale: they are tinted with ImageColor3
+-- at runtime, and a coloured sprite cannot be recoloured.
+Theme.Image = {
+	-- A filled hexagon, transparent background. Roblox has no hexagon
+	-- primitive, so this is the only way to get the skill-tree tile shape.
+	-- Asset type 1 (Image), not 13 (Decal) - an ImageLabel will not render a
+	-- decal id, which is the usual reason a pasted id shows nothing.
+	HexNode = "rbxassetid://3113323162",
+}
+
 Theme.Font = {
 	Regular = Enum.Font.GothamBold, -- yes, bold: nothing here is body copy
 	Heavy = Enum.Font.GothamBlack,

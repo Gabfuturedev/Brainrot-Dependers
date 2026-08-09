@@ -19,7 +19,10 @@ local Remotes = require(Shared.Remotes)
 
 local CurrencyService = require(script.Parent.CurrencyService)
 local DataService = require(script.Parent.DataService)
+local SkillService = require(script.Parent.SkillService)
 
+-- Base deployment slots. The Squad skill adds to this, so nothing outside
+-- maxEquipped() should ever read the constant directly.
 local MAX_EQUIPPED = 3
 -- Hard ceiling on the collection. Without one, ownedPets grows for as long as a
 -- player keeps hatching: the profile gets slower to save every session and the
@@ -61,7 +64,10 @@ local inventoryUpdated: RemoteEvent
 local eggHosts: { [string]: BasePart } = {}
 local lastHatchAt: { [Player]: number } = {}
 
-PetInventoryService.MaxEquipped = MAX_EQUIPPED
+-- How many brainrots this player may deploy, base plus whatever Squad adds.
+function PetInventoryService.maxEquipped(player: Player): number
+	return MAX_EQUIPPED + math.floor(SkillService.value(player, "Squad"))
+end
 PetInventoryService.MaxOwned = MAX_OWNED
 
 local function isEquipped(data: any, petId: string): boolean
@@ -86,7 +92,6 @@ local function countOwned(data: any): number
 	return count
 end
 
--- Pet config names of everything currently equipped, in slot order.
 -- Ids as well as names, in slot order. The id matters because a brainrot downed
 -- during a wave has to stay down until it ends, and "which one" cannot be
 -- answered by a name when three of them are the same pet.
@@ -144,7 +149,7 @@ local function pushInventory(player: Player)
 	inventoryUpdated:FireClient(
 		player,
 		PetInventoryService.getInventory(player),
-		MAX_EQUIPPED,
+		PetInventoryService.maxEquipped(player),
 		MAX_OWNED,
 		if data then data.discovered else {}
 	)
@@ -165,7 +170,7 @@ function PetInventoryService.grantPet(player: Player, petName: string): string?
 	data.ownedPets[petId] = petName
 	data.discovered[petName] = true
 
-	if #data.equipped < MAX_EQUIPPED then
+	if #data.equipped < PetInventoryService.maxEquipped(player) then
 		table.insert(data.equipped, petId)
 		equippedChanged:Fire(player)
 	end
@@ -190,7 +195,7 @@ local function setEquipped(player: Player, petId: any, shouldEquip: any)
 		if index then
 			return -- already equipped
 		end
-		if #data.equipped >= MAX_EQUIPPED then
+		if #data.equipped >= PetInventoryService.maxEquipped(player) then
 			return -- full; the client greys these out, but never trust that
 		end
 		table.insert(data.equipped, petId)
@@ -254,7 +259,7 @@ local function equipBest(player: Player)
 	end)
 
 	local chosen: { string } = {}
-	for index = 1, math.min(MAX_EQUIPPED, #ranked) do
+	for index = 1, math.min(PetInventoryService.maxEquipped(player), #ranked) do
 		table.insert(chosen, ranked[index].id)
 	end
 
@@ -395,7 +400,7 @@ local function hatch(player: Player, eggName: string, count: number)
 	local results: { { name: string, rarity: string } } = {}
 
 	for _ = 1, toHatch do
-		local petName = EggConfig.roll(egg)
+		local petName = EggConfig.roll(egg, SkillService.value(player, "Luck"))
 		local stats = if petName then PetConfig.get(petName) else nil
 		if not petName or not stats then
 			warn(`[PetInventoryService] {eggName} rolled an invalid pet: {petName}`)

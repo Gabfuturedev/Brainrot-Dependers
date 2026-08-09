@@ -25,6 +25,7 @@ local BreakableService = require(script.Parent.BreakableService)
 local EnemyService = require(script.Parent.EnemyService)
 local PetInventoryService = require(script.Parent.PetInventoryService)
 local PlotService = require(script.Parent.PlotService)
+local SkillService = require(script.Parent.SkillService)
 local VfxService = require(script.Parent.VfxService)
 
 local ATTACK_REQUEST_COOLDOWN = 0.1 -- cheap guard against remote spam
@@ -513,7 +514,7 @@ local function indexTemplates()
 	print(`[PetService] indexed {#names} pet model(s): {table.concat(names, ", ")}`)
 end
 
-local function buildPet(petName: string, petId: string, slot: number, ownerRoot: BasePart): Pet?
+local function buildPet(petName: string, petId: string, slot: number, ownerRoot: BasePart, owner: Player): Pet?
 	local stats = PetConfig.get(petName)
 	if not stats then
 		warn(`[PetService] no stats configured for '{petName}'`)
@@ -580,8 +581,9 @@ local function buildPet(petName: string, petId: string, slot: number, ownerRoot:
 
 	-- HealthBars reads these; a brainrot in a fight gets a bar like anything
 	-- else, with nothing extra told to anyone
-	petRoot:SetAttribute("MaxHealth", stats.health)
-	petRoot:SetAttribute("Health", stats.health)
+	local health = math.floor(stats.health * SkillService.value(owner, "Vigour"))
+	petRoot:SetAttribute("MaxHealth", health)
+	petRoot:SetAttribute("Health", health)
 
 	local pet: Pet = {
 		model = model,
@@ -665,6 +667,11 @@ function PetService.damagePet(part: BasePart, amount: number): boolean
 			for slot, survivor in group.pets do
 				survivor.slot = slot
 			end
+
+			-- Losing the line does not end the run any more; the core falling
+			-- does. What happens now is that everything walks straight past to
+			-- the core, and the player gets to watch it - which is a far better
+			-- lesson than a screen saying they lost.
 			return true
 		end
 	end
@@ -738,7 +745,7 @@ local function refresh(player: Player)
 		end
 
 		local slot = #group.pets + 1
-		local pet = buildPet(entry.name, entry.id, slot, anchorFor(group, ownerRoot))
+		local pet = buildPet(entry.name, entry.id, slot, anchorFor(group, ownerRoot), player)
 		if pet then
 			table.insert(group.pets, pet)
 		end
@@ -906,9 +913,14 @@ local function updatePet(pet: Pet, group: PetGroup, ownerRoot: BasePart, deltaTi
 
 	-- Whichever service owns this target pays out: the reward is split between
 	-- everyone who damaged it, so we only care whether this hit finished it off.
+	-- Applied here rather than baked into pet.stats: PetConfig.get returns a
+	-- cached table shared by every player, so writing a multiplier into it would
+	-- hand one player's upgrades to everyone.
+	local damage = math.floor(pet.stats.damage * SkillService.value(group.owner, "Ferocity"))
+
 	local killed = if isEnemy
-		then EnemyService.damage(target, pet.stats.damage, group.owner)
-		else BreakableService.damage(target, pet.stats.damage, group.owner)
+		then EnemyService.damage(target, damage, group.owner)
+		else BreakableService.damage(target, damage, group.owner)
 
 	if killed then
 		assignTarget(group, nil)
@@ -1015,13 +1027,33 @@ function PetService.start()
 		damage = PetService.damagePet,
 	})
 
-	-- the wave is over, so everything that went down gets back up
-	EnemyService.WaveEnded:Connect(function(player: Player)
+	-- Everything that went down gets back up, and everything that survived gets
+	-- patched up.
+	--
+	-- Healing survivors is the half that was missing before: refresh only ran
+	-- when something had been downed, so a group that took damage and lost
+	-- nobody carried its wounds forward with no way to ever recover them.
+	local function restore(player: Player)
 		if downed[player] then
 			downed[player] = nil
-			refresh(player)
+			refresh(player) -- rebuilds at full health, downed ones included
+			return
 		end
-	end)
+
+		local group = groups[player]
+		if not group then
+			return
+		end
+		for _, pet in group.pets do
+			-- back to the same number buildPet set, Vigour included
+			pet.root:SetAttribute("Health", pet.root:GetAttribute("MaxHealth"))
+		end
+	end
+
+	-- Between waves, and again when the run ends. Recovering per wave is what
+	-- keeps a bad wave from deciding the whole run.
+	EnemyService.WaveCleared:Connect(restore)
+	EnemyService.RunEnded:Connect(restore)
 
 	Players.PlayerRemoving:Connect(function(player)
 		downed[player] = nil

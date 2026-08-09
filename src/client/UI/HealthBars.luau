@@ -22,7 +22,7 @@ local UIKit = require(script.Parent.UIKit)
 -- under Enemies, brainrots under Pets, and none is guaranteed to exist when
 -- this runs. Adding a folder here is all it takes to give a new kind of thing
 -- a health bar - this module never learns what any of them are.
-local WATCHED = { "Areas", "Enemies", "Pets" }
+local WATCHED = { "Areas", "Enemies", "Pets", "Plots" }
 
 local WIDTH = 132
 local HEIGHT = 34

@@ -29,6 +29,8 @@ local PROFILE_TEMPLATE = {
 	-- index has to remember what you have seen even after you delete it, or
 	-- clearing out duplicates would re-lock pets you already found.
 	discovered = {} :: { [string]: boolean },
+	highestWave = 0, -- furthest wave survived, across every run
+	skillLevels = {} :: { [string]: number }, -- upgradeId -> level, absent is zero
 }
 
 export type Data = typeof(PROFILE_TEMPLATE)

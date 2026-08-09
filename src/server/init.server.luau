@@ -9,6 +9,7 @@ local Services = script.Services
 -- before players arrive.
 require(Services.PlotService).start()
 require(Services.CurrencyService).start()
+require(Services.SkillService).start()
 require(Services.VfxService).start()
 require(Services.DropService).start()
 require(Services.AreaService).start()
